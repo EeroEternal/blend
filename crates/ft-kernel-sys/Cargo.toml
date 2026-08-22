@@ -1,0 +1,10 @@
+[package]
+name = "ft-kernel-sys"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[features]
+default = []
+# 启用后链接 libftkernels.so（CUDA 13 编译，见 kernels/ 目录）
+cuda = []

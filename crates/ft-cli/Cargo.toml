@@ -1,0 +1,20 @@
+[package]
+name = "ft-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "blend"
+path = "src/main.rs"
+
+[dependencies]
+ft-core = { workspace = true }
+ft-server = { workspace = true }
+ft-bench = { workspace = true }
+ft-moe = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }

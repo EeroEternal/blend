@@ -1,0 +1,19 @@
+[package]
+name = "ft-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ft-core = { workspace = true }
+ft-engine = { workspace = true }
+ft-memory = { workspace = true }
+ft-moe = { workspace = true }
+ft-tokenizer = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+flume = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+futures-core = "0.3"
+tokio-stream = "0.1"

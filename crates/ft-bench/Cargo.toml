@@ -1,0 +1,10 @@
+[package]
+name = "ft-bench"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ft-moe = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }

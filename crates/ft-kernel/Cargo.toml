@@ -1,0 +1,13 @@
+[package]
+name = "ft-kernel"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+cuda = ["ft-kernel-sys/cuda"]
+
+[dependencies]
+ft-core = { workspace = true }
+ft-kernel-sys = { workspace = true }
+tracing = { workspace = true }

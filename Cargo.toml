@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/xinference/blend"
+
+[workspace.dependencies]
+ft-core = { path = "crates/ft-core" }
+ft-memory = { path = "crates/ft-memory" }
+ft-moe = { path = "crates/ft-moe" }
+ft-engine = { path = "crates/ft-engine" }
+ft-kernel-sys = { path = "crates/ft-kernel-sys" }
+ft-kernel = { path = "crates/ft-kernel" }
+ft-tokenizer = { path = "crates/ft-tokenizer" }
+ft-loader = { path = "crates/ft-loader" }
+ft-attention = { path = "crates/ft-attention" }
+ft-models = { path = "crates/ft-models" }
+ft-bench = { path = "crates/ft-bench" }
+ft-server = { path = "crates/ft-server" }
+thiserror = "2"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+flume = "0.11"
+rayon = "1"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

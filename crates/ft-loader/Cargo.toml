@@ -1,0 +1,10 @@
+[package]
+name = "ft-loader"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ft-core = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
