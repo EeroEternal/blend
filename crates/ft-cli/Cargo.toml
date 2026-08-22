@@ -12,6 +12,7 @@ ft-core = { workspace = true }
 ft-server = { workspace = true }
 ft-bench = { workspace = true }
 ft-moe = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }

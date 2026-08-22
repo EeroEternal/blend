@@ -8,3 +8,4 @@ ft-core = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+memmap2 = "0.9"

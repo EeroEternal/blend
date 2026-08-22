@@ -29,6 +29,29 @@ enum Cmd {
         #[arg(long, default_value = "~/.cache/blend/benchbw.json")]
         out: String,
     },
+    /// CPU MoE 执行器数值对拍：读 fixtures 目录（manifest.json + f32 bins）
+    Parity {
+        /// fixture 目录：manifest.json / h_in.f32 / w13.f32 / w2.f32 / h_golden.f32
+        #[arg(long)]
+        dir: String,
+        #[arg(long, default_value_t = 1e-3)]
+        tol: f32,
+    },
+    /// CPU MoE 执行器吞叶基准（DSV4 形状默认值）
+    MoeBench {
+        #[arg(long, default_value_t = 8)]
+        tokens: usize,
+        #[arg(long, default_value_t = 4096)]
+        hidden: usize,
+        #[arg(long, default_value_t = 2048)]
+        inter: usize,
+        #[arg(long, default_value_t = 256)]
+        experts: usize,
+        #[arg(long, default_value_t = 6)]
+        k: usize,
+        #[arg(long, default_value_t = 5)]
+        iters: usize,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -63,9 +86,18 @@ fn main() -> anyhow::Result<()> {
                 path
             );
         }
+        Cmd::Parity { dir, tol } => {
+            parity::run(std::path::Path::new(&dir), tol)?;
+        }
+        Cmd::MoeBench { tokens, hidden, inter, experts, k, iters } => {
+            moe_bench::run(tokens, hidden, inter, experts, k, iters);
+        }
     }
     Ok(())
 }
+
+mod moe_bench;
+mod parity;
 
 fn expand_tilde(p: &str) -> String {
     if let Some(rest) = p.strip_prefix("~/") {
