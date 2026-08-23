@@ -177,7 +177,7 @@ fn attention(
 ) -> Vec<f32> {
     let hq = HEADS * HEAD_DIM;
     let hk = KV_HEADS * HEAD_DIM;
-    let gemv_w = |w: &[u16], x: &[f32], rows: usize, cols: usize, which: usize| -> Vec<f32> {
+    let mut gemv_w = |w: &[u16], x: &[f32], rows: usize, cols: usize, which: usize| -> Vec<f32> {
         #[cfg(feature = "cuda")]
         if let Some(g) = gpu.as_mut() {
             if let Ok(v) = g.gemv(layer_id, which, x, rows, cols) {
