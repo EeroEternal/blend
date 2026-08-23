@@ -24,8 +24,40 @@ pub struct Gateway {
     inner: Arc<Inner>,
 }
 
+#[derive(Debug, Clone)]
+pub struct Worker {
+    pub url: String,
+    pub tp: usize,
+    pub label: String,
+}
+
+impl Worker {
+    /// 格式: http://host:port 或 http://host:port#tp=2,label=qwen-tp2
+    pub fn parse(raw: &str) -> Self {
+        let (url, frag) = match raw.split_once('#') {
+            Some((u, f)) => (u, f),
+            None => (raw, ""),
+        };
+        let mut tp = 1usize;
+        let mut label = String::new();
+        for part in frag.split(',') {
+            if let Some((k, v)) = part.split_once('=') {
+                match k.trim() {
+                    "tp" => tp = v.parse().unwrap_or(1),
+                    "label" => label = v.to_string(),
+                    _ => {}
+                }
+            }
+        }
+        if label.is_empty() {
+            label = if tp > 1 { format!("tp{tp}") } else { "replica".into() };
+        }
+        Self { url: url.trim_end_matches('/').to_string(), tp, label }
+    }
+}
+
 struct Inner {
-    workers: Vec<String>,
+    workers: Vec<Worker>,
     client: reqwest::Client,
     rr: AtomicUsize,
     inflight: Vec<AtomicUsize>,
@@ -34,10 +66,10 @@ struct Inner {
 
 impl Gateway {
     pub fn new(workers: Vec<String>) -> anyhow::Result<Self> {
-        let workers: Vec<String> = workers
+        let workers: Vec<Worker> = workers
             .into_iter()
-            .map(|w| w.trim_end_matches('/').to_string())
-            .filter(|w| !w.is_empty())
+            .filter(|w| !w.trim().is_empty())
+            .map(|w| Worker::parse(&w))
             .collect();
         if workers.is_empty() {
             anyhow::bail!("至少需要一个 --worker");
@@ -92,7 +124,7 @@ async fn healthz(State(gw): State<Gateway>) -> impl IntoResponse {
     Json(serde_json::json!({
         "ok": true,
         "role": "blend-control",
-        "workers": gw.inner.workers,
+        "workers": gw.inner.workers.iter().map(|w| format!("{} ({})", w.url, w.label)).collect::<Vec<_>>(),
     }))
 }
 
@@ -104,7 +136,9 @@ async fn workers(State(gw): State<Gateway>) -> impl IntoResponse {
         .enumerate()
         .map(|(i, u)| {
             serde_json::json!({
-                "url": u,
+                "url": u.url,
+                "label": u.label,
+                "tp": u.tp,
                 "inflight": gw.inner.inflight[i].load(Ordering::Relaxed),
                 "hits": gw.inner.hits[i].load(Ordering::Relaxed),
             })
@@ -119,7 +153,7 @@ async fn proxy(State(gw): State<Gateway>, req: Request) -> Response {
     let uri = req.uri().clone();
     let path_q = path_and_query(&uri);
     let idx = gw.pick_idx(&headers);
-    let worker = gw.inner.workers[idx].clone();
+    let worker = gw.inner.workers[idx].url.clone();
     gw.inner.inflight[idx].fetch_add(1, Ordering::Relaxed);
     gw.inner.hits[idx].fetch_add(1, Ordering::Relaxed);
     let url = format!("{worker}{path_q}");
@@ -192,6 +226,24 @@ struct InflightGuard {
 impl Drop for InflightGuard {
     fn drop(&mut self) {
         self.inner.inflight[self.idx].fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Worker;
+    #[test]
+    fn parse_plain() {
+        let w = Worker::parse("http://127.0.0.1:1930");
+        assert_eq!(w.url, "http://127.0.0.1:1930");
+        assert_eq!(w.tp, 1);
+        assert_eq!(w.label, "replica");
+    }
+    #[test]
+    fn parse_tp() {
+        let w = Worker::parse("http://127.0.0.1:1940#tp=2,label=qwen-tp2");
+        assert_eq!(w.tp, 2);
+        assert_eq!(w.label, "qwen-tp2");
     }
 }
 
