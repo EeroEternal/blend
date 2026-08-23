@@ -117,6 +117,48 @@ int ft_gpu_gemv_bf16(const uint16_t* w, const float* x, float* out,
     return cudaGetLastError() == cudaSuccess ? 0 : -1;
 }
 
+// 每个 block 处理一个 head（n=head_dim）
+__global__ void rmsnorm_heads_kernel(float* x, const float* w, int n_heads, int dim, float eps) {
+    int hd = blockIdx.x;
+    if (hd >= n_heads) return;
+    float* h = x + hd * dim;
+    float local = 0.f;
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) local += h[i] * h[i];
+    __shared__ float sm[256];
+    sm[threadIdx.x] = local;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) sm[threadIdx.x] += sm[threadIdx.x + s];
+        __syncthreads();
+    }
+    __shared__ float inv;
+    if (threadIdx.x == 0) inv = rsqrtf(sm[0] / dim + eps);
+    __syncthreads();
+    for (int i = threadIdx.x; i < dim; i += blockDim.x) h[i] *= inv * w[i];
+}
+
+__global__ void store_kv_bf16_kernel(const float* src, uint16_t* cache,
+                                     int kv_heads, int dim, int pos, int max_seq) {
+    int kv = blockIdx.x;
+    int d = threadIdx.x;
+    if (kv >= kv_heads || d >= dim) return;
+    uint32_t u = __float_as_uint(src[kv * dim + d]);
+    cache[(static_cast<size_t>(kv) * max_seq + pos) * dim + d] =
+        (uint16_t)((u + 0x7fffu + ((u >> 16) & 1u)) >> 16);
+}
+
+extern "C" {
+int ft_gpu_rmsnorm_heads(float* x, const float* w, int n_heads, int dim, float eps, cudaStream_t s) {
+    rmsnorm_heads_kernel<<<n_heads, 256, 0, s>>>(x, w, n_heads, dim, eps);
+    return cudaGetLastError() == cudaSuccess ? 0 : -1;
+}
+int ft_gpu_store_kv_bf16(const float* src, uint16_t* cache, int kv_heads, int dim, int pos,
+                         int max_seq, cudaStream_t s) {
+    store_kv_bf16_kernel<<<kv_heads, dim, 0, s>>>(src, cache, kv_heads, dim, pos, max_seq);
+    return cudaGetLastError() == cudaSuccess ? 0 : -1;
+}
+}
+
 __global__ void rmsnorm_kernel(float* x, const float* w, int n, float eps) {
     __shared__ float ss;
     float local = 0.f;

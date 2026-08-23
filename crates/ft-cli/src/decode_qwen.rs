@@ -68,9 +68,9 @@ impl GpuAttn {
         Ok((q, k, v))
     }
 
-    /// 整段注意力留在 GPU：QKV → RMSNorm/RoPE → KV cache → GQA → O。只 D2H 输出。
+    /// 整段注意力留在 GPU：QKV → 合并 RMSNorm/RoPE → bf16 KV → FlashInfer → O。
     fn decode_attn(&mut self, layer: usize, x: &[f32], pos: usize) -> anyhow::Result<Vec<f32>> {
-        use ft_kernel::{copy_kv, gemv_bf16, gqa_decode, rmsnorm, rope};
+        use ft_kernel::{bf16_to_f32, f32_to_bf16, fi_single_decode, gemv_bf16, rmsnorm_heads, rope, store_kv_bf16_ptr};
         let hq = HEADS * HEAD_DIM;
         let hk = KV_HEADS * HEAD_DIM;
         let cols = x.len();
@@ -78,73 +78,29 @@ impl GpuAttn {
         gemv_bf16(self.w[layer * 4].as_ptr() as *const u16, &self.x, &mut self.yq, hq, cols, &self.stream)?;
         gemv_bf16(self.w[layer * 4 + 1].as_ptr() as *const u16, &self.x, &mut self.yk, hk, cols, &self.stream)?;
         gemv_bf16(self.w[layer * 4 + 2].as_ptr() as *const u16, &self.x, &mut self.yv, hk, cols, &self.stream)?;
-        // Q/K RMSNorm + RoPE（逐 head：q 是 32*128 连续）
-        for hd in 0..HEADS {
-            let _ = hd;
-        }
-        rmsnorm(&mut self.yq, &self.qn[layer], HEAD_DIM, EPS, &self.stream)?; // WRONG: rmsnorm whole 4096 with head_dim w
-        // 正确：每个 head 单独 RMSNorm。用循环 offset 暂不支持，退回按 head 的 host 路径若失败。
-        // 简化：对每个 head 调 rmsnorm 需要子视图。这里用 rope+attn 仍在 GPU，norm 用已有逐 head 逻辑则要 D2H。
-        // 折中：Q/K 整段用同一 scale 不合适。改为 GPU 上按 head 的 rmsnorm：复用 kernel n=128，循环 32 次指针偏移。
-        for hd in 0..HEADS {
-            let off = hd * HEAD_DIM;
-            unsafe {
-                let p = (self.yq.as_mut_ptr() as *mut f32).add(off);
-                let _ = ft_kernel_sys::cuda::ft_gpu_rmsnorm(
-                    p, self.qn[layer].as_ptr() as *const f32, HEAD_DIM as i32, EPS, self.stream.raw(),
-                );
-            }
-        }
-        for hd in 0..KV_HEADS {
-            let off = hd * HEAD_DIM;
-            unsafe {
-                let p = (self.yk.as_mut_ptr() as *mut f32).add(off);
-                let _ = ft_kernel_sys::cuda::ft_gpu_rmsnorm(
-                    p, self.kn[layer].as_ptr() as *const f32, HEAD_DIM as i32, EPS, self.stream.raw(),
-                );
-            }
-        }
+        rmsnorm_heads(&mut self.yq, &self.qn[layer], HEADS, HEAD_DIM, EPS, &self.stream)?;
+        rmsnorm_heads(&mut self.yk, &self.kn[layer], KV_HEADS, HEAD_DIM, EPS, &self.stream)?;
         rope(&mut self.yq, HEADS, HEAD_DIM, pos, ROPE_THETA, &self.stream)?;
         rope(&mut self.yk, KV_HEADS, HEAD_DIM, pos, ROPE_THETA, &self.stream)?;
-        let layer_off = layer * KV_HEADS * self.max_seq * HEAD_DIM;
-        copy_kv(&mut self.k_cache, layer_off, &self.yk, KV_HEADS, HEAD_DIM, pos, self.max_seq, &self.stream)?;
-        copy_kv(&mut self.v_cache, layer_off, &self.yv, KV_HEADS, HEAD_DIM, pos, self.max_seq, &self.stream)?;
-        let kptr_off = layer_off;
-        // gqa 需要该层 cache 指针 — 用整块 + kernel 内 kv*max_seq。传入 offset 后的 view：
-        // 把 k_cache/v_cache 的 layer 起点当作 [kv,max_seq,dim]
-        {
-            use ft_kernel::{f32_to_bf16, f32_to_bf16_ptr, bf16_to_f32, fi_single_decode};
-            let qn = HEADS * HEAD_DIM;
-            let kn = KV_HEADS * self.max_seq * HEAD_DIM;
-            let _ = f32_to_bf16(&self.yq, &mut self.q_b, qn, &self.stream);
-            unsafe {
-                let k0 = (self.k_cache.as_ptr() as *const f32).add(kptr_off);
-                let v0 = (self.v_cache.as_ptr() as *const f32).add(kptr_off);
-                let _ = f32_to_bf16_ptr(k0, self.k_b.as_mut_ptr() as *mut u16, kn, &self.stream);
-                let _ = f32_to_bf16_ptr(v0, self.v_b.as_mut_ptr() as *mut u16, kn, &self.stream);
-            }
-            if fi_single_decode(
-                self.q_b.as_ptr() as *const u16,
-                self.k_b.as_ptr() as *const u16,
-                self.v_b.as_ptr() as *const u16,
+        // 本层 bf16 KV：k_b/v_b 按层复用一块工作区（每层独立 cache 用 offset 写入 k_cache 的 bf16 视图）
+        // 直接把本步 k/v 写入 k_b/v_b 的 pos 槽（工作区即该层 cache）
+        let layer_u16 = layer * KV_HEADS * self.max_seq * HEAD_DIM;
+        unsafe {
+            store_kv_bf16_ptr(&self.yk, (self.k_cache.as_mut_ptr() as *mut u16).add(layer_u16), KV_HEADS, HEAD_DIM, pos, self.max_seq, &self.stream)?;
+            store_kv_bf16_ptr(&self.yv, (self.v_cache.as_mut_ptr() as *mut u16).add(layer_u16), KV_HEADS, HEAD_DIM, pos, self.max_seq, &self.stream)?;
+        }
+        let qn = HEADS * HEAD_DIM;
+        f32_to_bf16(&self.yq, &mut self.q_b, qn, &self.stream)?;
+        unsafe {
+            let k0 = (self.k_cache.as_ptr() as *const u16).add(layer_u16);
+            let v0 = (self.v_cache.as_ptr() as *const u16).add(layer_u16);
+            fi_single_decode(
+                self.q_b.as_ptr() as *const u16, k0, v0,
                 self.o_b.as_mut_ptr() as *mut u16,
                 HEADS, KV_HEADS, HEAD_DIM, pos + 1, self.max_seq, &self.stream,
-            ).is_ok() {
-                let _ = bf16_to_f32(&self.o_b, &mut self.ctx, qn, &self.stream);
-            } else {
-                unsafe {
-                    let k0 = (self.k_cache.as_ptr() as *const f32).add(kptr_off);
-                    let v0 = (self.v_cache.as_ptr() as *const f32).add(kptr_off);
-                    let _ = ft_kernel_sys::cuda::ft_gpu_gqa_decode(
-                        self.yq.as_ptr() as *const f32, k0, v0,
-                        self.ctx.as_mut_ptr() as *mut f32,
-                        HEADS as i32, KV_HEADS as i32, HEAD_DIM as i32,
-                        (pos + 1) as i32, self.max_seq as i32,
-                        1.0 / (HEAD_DIM as f32).sqrt(), self.stream.raw(),
-                    );
-                }
-            }
+            )?;
         }
+        bf16_to_f32(&self.o_b, &mut self.ctx, qn, &self.stream)?;
         gemv_bf16(self.w[layer * 4 + 3].as_ptr() as *const u16, &self.ctx, &mut self.yo, cols, hq, &self.stream)?;
         self.stream.sync()?;
         let mut o = vec![0f32; cols];
@@ -333,11 +289,9 @@ fn attention(
     let hq = HEADS * HEAD_DIM;
     let hk = KV_HEADS * HEAD_DIM;
     #[cfg(feature = "cuda")]
-    if std::env::var_os("BLEND_FI").is_some() {
-        if let Some(g) = gpu.as_mut() {
-            if let Ok(o) = g.decode_attn(layer_id, x, pos) {
-                return o;
-            }
+    if let Some(g) = gpu.as_mut() {
+        if let Ok(o) = g.decode_attn(layer_id, x, pos) {
+            return o;
         }
     }
     let (q, k, v) = {
