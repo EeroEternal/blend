@@ -146,6 +146,12 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑤'' HybridRuntime / DecodeDriver 收编 ✅ 完成（2026-08-23）
+- [x] `ft-moe::HybridRuntime`：plan_layer + cpu_ids + reset_stats，sticky-routing 单测
+- [x] `ft-engine::DecodeDriver<K: MoeKernel>`：按层 plan→compute，内核可注入
+- [x] hybrid-smoke 改为驱动 DecodeDriver；warmup 后重置统计
+- [x] 真机：命中率 **67.0%**（精确对齐 8/12）；tok/s 4.6–9.3（同机 vllm/sglang 争抢导致波动，架构正确）
+
 ### ⑤' LRU + q* hybrid 路径 ✅ 完成（2026-08-23）
 - [x] `LruExpertCache`：(layer, expert) 键，3 个单测
 - [x] `blend hybrid-smoke`：命中跳过 / Fetch 按 PCIe 计时 / CpuCompute 走真实 moe_bf16
