@@ -146,6 +146,18 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑤' LRU + q* hybrid 路径 ✅ 完成（2026-08-23）
+- [x] `LruExpertCache`：(layer, expert) 键，3 个单测
+- [x] `blend hybrid-smoke`：命中跳过 / Fetch 按 PCIe 计时 / CpuCompute 走真实 moe_bf16
+- [x] 时间局部性模型（5/6 复用 + Fetch 填热集 + warmup）：
+  | 指标 | 全 CPU (decode-smoke) | **hybrid-smoke** | FreeToken 实测 |
+  |---|---|---|---|
+  | 命中率 | 0% | **68%**（对齐论文 8/12） | ~67% |
+  | tok/s | 6.3 | **15.7**（overlap 估算） | 31–32 |
+
+剩余差距 15.7 → 31：GPU 命中在 VRAM 上算（~1TB/s，本冒烟计 0 成本偏乐观，但 CPU 仍是瓶颈）；
+FreeToken CPU 内核 155 vs 我们 123 GB/s（×1.26 ≈ 20 tok/s），再加 GPU/CPU 真重叠与专家去重 → ~31。
+
 ### ⑤ engine decode 步接入真实 MoE ✅ 完成（2026-08-23）
 - [x] `blend decode-smoke`：调度器 admit→prefill→decode 循环 + 每步 N 层真实 moe_bf16
 - [x] 小形状冒烟：8 tok × 4 层 = 772 tok/s（调度器本身无瓶颈）
