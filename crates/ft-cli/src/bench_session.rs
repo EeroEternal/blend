@@ -50,9 +50,6 @@ pub async fn run(
         let mut acc = String::new();
         let mut tok = 0u32;
         while let Some(chunk) = resp.chunk().await.context("chunk")? {
-            if ttft.is_none() {
-                ttft = Some(t0.elapsed().as_secs_f64() * 1000.0);
-            }
             let s = String::from_utf8_lossy(&chunk);
             for line in s.lines() {
                 let line = line.trim();
@@ -63,6 +60,9 @@ pub async fn run(
                 }
                 if let Ok(v) = serde_json::from_str::<Value>(rest) {
                     if let Some(c) = v["choices"][0]["delta"]["content"].as_str() {
+                        if !c.is_empty() && ttft.is_none() {
+                            ttft = Some(t0.elapsed().as_secs_f64() * 1000.0);
+                        }
                         acc.push_str(c);
                         tok += 1;
                     }
