@@ -221,3 +221,16 @@ V2.0 若做不到 100 tok/s，说明反代或协议把 Graph 热路径打断了�
 v1 把 Rust 用在 forward 上，输掉了 PyTorch 白送的设备图。  
 v2 把 Rust 用在 **框架** 上：Agent、多模型、2/4 卡放置、CPU 专家与 GPU 的分工（q\*）。  
 算力层承认现实——**整网 GPU forward 用 PyTorch/FreeToken**。
+
+
+---
+
+## 10. V2.0 落地（2026-08-23）
+
+```bash
+blend control --host 127.0.0.1 --port 8080 --worker http://127.0.0.1:1930
+```
+
+- 流式透传 `/v1/*`，不缓冲 completion
+- `x-blend-session` / `x-session-id` 粘滞 worker
+- 真机：经 control 打 Qwen3-30B，FT 日志 **138–143 tok/s**（验收 ≥100 通过）
