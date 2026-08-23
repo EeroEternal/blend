@@ -3,7 +3,9 @@
 pub mod cpu;
 pub mod plan;
 pub mod policy;
+pub mod topology;
 
 pub use cpu::{CpuMoeExecutor, NaiveF32Executor};
 pub use plan::{MoePlan, MissAction};
 pub use policy::{BackendKind, BandwidthProfile, QStarPolicy};
+pub use topology::physical_cores;

@@ -47,6 +47,12 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         threads: usize,
     },
+    /// GPU 链路冒烟：设备查询 + H2D + 内核 + D2H + 校验（需 --features cuda 构建）
+    GpuSmoke {
+        /// 元素个数
+        #[arg(long, default_value_t = 1024)]
+        n: usize,
+    },
     /// CPU MoE 执行器吞叶基准（DSV4 形状默认值）
     MoeBench {
         #[arg(long, default_value_t = 8)]
@@ -105,10 +111,14 @@ fn main() -> anyhow::Result<()> {
         Cmd::MemBench { gib, iters, threads } => {
             mem_bench::run(gib, iters, threads);
         }
+        Cmd::GpuSmoke { n } => {
+            gpu_smoke::run(n)?;
+        }
     }
     Ok(())
 }
 
+mod gpu_smoke;
 mod mem_bench;
 mod moe_bench;
 mod parity;

@@ -7,49 +7,50 @@
 //! 3. flashinfer / sglang-kernel 稳定导出符号 dlopen
 
 #[cfg(feature = "cuda")]
-pub mod ffi {
-    use std::os::raw::{c_int, c_void};
+#[allow(non_upper_case_globals)]
+    pub mod cuda {
+    //! CUDA Runtime API 最小子集 + blend 自有内核入口。
+    //! 链接目标：libcudart (CUDA 13) + libftkernels.so（kernels/build.sh 产物）
+    use std::os::raw::{c_char, c_int};
 
-    // 张量一律以 (ptr, device_ptr) 裸指针传递；stream 为 cudaStream_t。
-    pub type FtStream = *mut c_void;
     pub type FtStatus = c_int;
-
     pub const FT_OK: FtStatus = 0;
 
-    extern "C" {
-        /// NVFP4 fused MoE（gate/up/down + silu + 路由加权）
-        pub fn ft_nvfp4_fused_moe(
-            hidden: *mut c_void,      // [tokens, H] bf16 in/out
-            w13: *const c_void,       // [E, 2I, H] nvfp4
-            w2: *const c_void,        // [E, H, I] nvfp4
-            topk: *const u32,         // [tokens, k]
-            weights: *const f32,      // [tokens, k]
-            tokens: c_int,
-            num_experts: c_int,
-            hidden_size: c_int,
-            inter_size: c_int,
-            k: c_int,
-            stream: FtStream,
-        ) -> FtStatus;
-
-        /// DSA sparse attention（DeepSeek sparse attention index+gather）
-        pub fn ft_dsa_sparse_attention(
-            q: *const c_void,
-            kv_cache: *mut c_void,
-            indexer: *const c_void,
-            out: *mut c_void,
-            stream: FtStream,
-        ) -> FtStatus;
-
-        /// 批量 pinned→device memcpy（prefill 双缓冲的取回路径）
-        pub fn ft_batch_memcpy_async(
-            dsts: *const *mut c_void,
-            srcs: *const *const c_void,
-            sizes: *const usize,
-            n: c_int,
-            stream: FtStream,
-        ) -> FtStatus;
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct CudaDeviceProp {
+        pub name: [c_char; 256],
+        // 其余字段按 CUDA 文件布局占位；我们只用前 256 字节的名字。
+        pub _pad: [u8; 8192 - 256],
     }
+
+    extern "C" {
+        // libcudart
+        pub fn cudaGetDeviceCount(count: *mut c_int) -> FtStatus;
+        pub fn cudaGetDeviceProperties(prop: *mut CudaDeviceProp, device: c_int) -> FtStatus;
+        pub fn cudaMalloc(dev_ptr: *mut *mut std::ffi::c_void, size: usize) -> FtStatus;
+        pub fn cudaFree(dev_ptr: *mut std::ffi::c_void) -> FtStatus;
+        pub fn cudaMemcpy(
+            dst: *mut std::ffi::c_void,
+            src: *const std::ffi::c_void,
+            count: usize,
+            kind: c_int,
+        ) -> FtStatus;
+        pub fn cudaDeviceSynchronize() -> FtStatus;
+
+        // libftkernels.so
+        pub fn ft_cuda_device_count() -> c_int;
+        pub fn ft_cuda_driver_version() -> c_int;
+        pub fn ft_vector_add(
+            a: *const f32,
+            b: *const f32,
+            out: *mut f32,
+            n: c_int,
+        ) -> c_int;
+    }
+
+    pub const cudaMemcpyHostToDevice: c_int = 1;
+    pub const cudaMemcpyDeviceToHost: c_int = 2;
 }
 
 #[cfg(not(feature = "cuda"))]

@@ -431,6 +431,7 @@ dependencies = [
  "clap",
  "ft-bench",
  "ft-core",
+ "ft-kernel",
  "ft-moe",
  "ft-server",
  "serde_json",

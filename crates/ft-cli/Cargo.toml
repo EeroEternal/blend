@@ -7,11 +7,16 @@ edition.workspace = true
 name = "blend"
 path = "src/main.rs"
 
+[features]
+default = []
+cuda = ["ft-kernel/cuda"]
+
 [dependencies]
 ft-core = { workspace = true }
 ft-server = { workspace = true }
 ft-bench = { workspace = true }
 ft-moe = { workspace = true }
+ft-kernel = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
