@@ -146,6 +146,12 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑦' GPU GEMV 优化 ✅ 完成（2026-08-23）
+- [x] 激活进 smem（避免每行重读 x）+ 双 bf16 展开
+- [x] DSV4 维度：**0.05 ms/expert，1111.7 GB/s**（接近 PRO 6000 HBM 量级）
+- [x] 对拍不变 rel=1.5e-4 PASS
+- 全 GPU 理论：43 层 × 6 专家 × 0.05 ms ≈ 13 ms/tok → ~77 tok/s
+
 ### ⑦ GPU 专家 FFN ✅ 完成（2026-08-23）
 - [x] `ft_gpu_expert_ffn`：bf16 GEMV + silu_mul + axpy（CUDA）
 - [x] `gpu-ffn-parity`：H4096/I2048 vs CPU naive **rel=1.5e-4 PASS**
