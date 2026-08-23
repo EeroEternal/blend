@@ -146,6 +146,12 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑦ GPU 专家 FFN ✅ 完成（2026-08-23）
+- [x] `ft_gpu_expert_ffn`：bf16 GEMV + silu_mul + axpy（CUDA）
+- [x] `gpu-ffn-parity`：H4096/I2048 vs CPU naive **rel=1.5e-4 PASS**
+- [x] hybrid `--real-pcie`：命中+Fetch 走 GPU FFN；warmup 后 GPU 45 ms / 4 tok ≈ 11 ms/tok
+- 粗算：GPU 单专家 ~65µs vs CPU ~1.4ms（约 20×）；瓶颈仍是 CPU miss（~2 专家/层）
+
 ### ⑥ 真 PCIe H2D ✅ 完成（2026-08-23）
 - [x] CUDA runtime：MemcpyAsync / Stream / MallocHost / SetDevice
 - [x] `PinnedBuf` + `GpuSlotBank` + `Stream` RAII
