@@ -37,6 +37,16 @@ enum Cmd {
         #[arg(long, default_value_t = 1e-3)]
         tol: f32,
     },
+    /// 多线程内存读带宽（STREAM-like），用于标定 q\* 画像的 cpu_gbps
+    MemBench {
+        /// 缓冲区大小 GiB
+        #[arg(long, default_value_t = 8)]
+        gib: usize,
+        #[arg(long, default_value_t = 3)]
+        iters: usize,
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
+    },
     /// CPU MoE 执行器吞叶基准（DSV4 形状默认值）
     MoeBench {
         #[arg(long, default_value_t = 8)]
@@ -92,10 +102,14 @@ fn main() -> anyhow::Result<()> {
         Cmd::MoeBench { tokens, hidden, inter, experts, k, iters } => {
             moe_bench::run(tokens, hidden, inter, experts, k, iters);
         }
+        Cmd::MemBench { gib, iters, threads } => {
+            mem_bench::run(gib, iters, threads);
+        }
     }
     Ok(())
 }
 
+mod mem_bench;
 mod moe_bench;
 mod parity;
 
