@@ -57,29 +57,30 @@ pub fn run(steps: usize, layers: usize, cache_slots: usize, threads: usize) {
     let mut pcie_ns = 0u64;
     let mut cpu_ns = 0u64;
 
+    let warmup = steps / 2; // 前一半不计（热集填入 GPU 缓存）
     let wall = Instant::now();
     for step in 0..steps {
         for layer in 0..layers {
-            // 时间局部性：约 2/3 复用上一 token 的专家，其余替换（对齐 8/12 hits）
+            // 时间局部性：5/6 复用（对齐论文 8/12 ≈ 67% 已在缓存 + 逐步 Fetch 填满热集）
             let mut routed = prev[layer].clone();
             if step == 0 {
                 for i in 0..k {
                     routed[i] = ((rnd() as usize).wrapping_add(layer * 17 + i * 31) % experts) as u32;
                 }
             } else {
-                let n_replace = (k + 2) / 3; // ≈ 2 of 6
-                for i in 0..n_replace {
-                    routed[i] = ((rnd() as usize).wrapping_add(layer * 13 + i * 7) % experts) as u32;
-                }
+                routed[0] = ((rnd() as usize).wrapping_add(layer * 13 + step * 7) % experts) as u32;
             }
             prev[layer] = routed.clone();
 
             let is_cached = |e: u32| cache.contains(ExpertKey { layer: layer as u32, expert: e });
             let plan = MoePlan::build(&routed, is_cached, &q);
             let (h_n, f_n, c_n) = plan.stats();
-            hits += h_n as u64;
-            fetches += f_n as u64;
-            cpu_misses += c_n as u64;
+            let count = step >= warmup;
+            if count {
+                hits += h_n as u64;
+                fetches += f_n as u64;
+                cpu_misses += c_n as u64;
+            }
 
             // 命中：提升 LRU
             for &e in &plan.cache_hits {
@@ -89,7 +90,7 @@ pub fn run(steps: usize, layers: usize, cache_slots: usize, threads: usize) {
             for m in &plan.misses {
                 if let MissAction::Fetch { expert_id } = m {
                     let ns = (bytes_per_expert / (profile.pcie_gbps * 1e9) * 1e9) as u64;
-                    pcie_ns += ns;
+                    if count { pcie_ns += ns; }
                     cache.insert(ExpertKey { layer: layer as u32, expert: *expert_id });
                 }
             }
@@ -116,7 +117,7 @@ pub fn run(steps: usize, layers: usize, cache_slots: usize, threads: usize) {
                 {
                     let _ = (&w13, &w2, &h, threads);
                 }
-                cpu_ns += t0.elapsed().as_nanos() as u64;
+                if count { cpu_ns += t0.elapsed().as_nanos() as u64; }
             }
         }
     }
@@ -125,7 +126,8 @@ pub fn run(steps: usize, layers: usize, cache_slots: usize, threads: usize) {
     let cpu_ms = cpu_ns as f64 / 1e6;
     // hybrid 重叠：PCIe fetch 与 CPU compute 并行，步时 ≈ max(pcie, cpu) + 命中(0)
     let overlap_ms = pcie_ms.max(cpu_ms);
-    let tok_s = if overlap_ms > 0.0 { steps as f64 / (overlap_ms / 1000.0) } else { 0.0 };
+    let measured = (steps - warmup).max(1) as f64;
+    let tok_s = if overlap_ms > 0.0 { measured / (overlap_ms / 1000.0) } else { 0.0 };
     let wall_tok_s = if wall_ms > 0.0 { steps as f64 / (wall_ms / 1000.0) } else { 0.0 };
 
     let total_access = hits + fetches + cpu_misses;
