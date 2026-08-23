@@ -109,6 +109,14 @@ PYBIND11 部分(尾部)                                                      ←
 - 注：共享机上偶发 83 GB/s 读数，为同机 vllm/sglang 负载干扰
 - [ ] bs>1 专家去重（T=8/E=256/K=6 下重复率仅 ~10%，优先级降低，大 batch 再做）
 
+**单 token 解码（交互场景关键路径）**：
+| 形状 | 延迟 | 带宽 | 全 CPU 估算 |
+|---|---|---|---|
+| DSV4 (H4096 I2048 k6, 43 层) | 3.7 ms/step | 81.8 GB/s | 3.7×43≈159 ms/tok ≈ 6 tok/s |
+| GLM-5.2 (H6144 I2048 k8, 75 层) | 6.5 ms/step | 92.7 GB/s | 6.5×75≈488 ms/tok ≈ 2 tok/s |
+
+对照 FreeToken 真机实测 31–32 / 16 tok/s：hybrid 后端 + GPU LRU 缓存承担大部分专家，CPU 只算 miss 的 ~82%。本内核作为 CPU 路径已具备支撑该吞吐的能力。
+
 ### ② core pinning ✅ 完成（结论反转：默认不 pin，opt-in）
 实测矩阵（8tok DSV4 形状，双路 EPYC / 2 NUMA 节点 / 逻辑 CPU 交错编号）：
 | 绑定策略 | 带宽 |

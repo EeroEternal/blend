@@ -11,6 +11,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// 调度器 + SIMD MoE 端到端冒烟（走 admit/prefill/decode 循环）
+    DecodeSmoke {
+        /// decode 步数
+        #[arg(long, default_value_t = 8)]
+        steps: usize,
+        /// 每步模拟的 MoE 层数（DSV4=43 / GLM-5.2=75）
+        #[arg(long, default_value_t = 4)]
+        layers: usize,
+        /// 使用 DSV4 真实形状（H4096 I2048 E256 k6）；默认小形状便于冒烟
+        #[arg(long, default_value_t = false)]
+        full: bool,
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
+    },
     /// 启动 OpenAI 兼容 API 服务（当前为 stub 引擎，P2 接 GPU 内核）
     Serve {
         #[arg(long, default_value = "0.0.0.0")]
@@ -87,6 +101,9 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
     match Cli::parse().cmd {
+        Cmd::DecodeSmoke { steps, layers, full, threads } => {
+            decode_smoke::run(steps, layers, full, threads);
+        }
         Cmd::Serve { host, port, model } => {
             let engine = ft_server::spawn_engine(model);
             let rt = tokio::runtime::Builder::new_multi_thread()
@@ -127,6 +144,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+mod decode_smoke;
 mod gpu_smoke;
 mod mem_bench;
 mod moe_bench;
