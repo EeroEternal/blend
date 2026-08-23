@@ -146,6 +146,12 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑩ 全模型专家栈 decode ✅ 完成（2026-08-23）
+- [x] `blend moe-model`：48 层 × 128 专家全部装入（58 GB / 114 s）
+- [x] 真实 router + AVX512BF16，attention stub = 残差直通
+- [x] **108 ms/tok = 9.3 tok/s**（Qwen3-30B-A3B 专家路径，4 step 稳态）
+- 无 attention/RMSNorm，数字是专家 FFN 下界；接上 attention 后还会更慢，hybrid+GPU 会再拉回去
+
 ### ⑨ 整层真实 MoE ✅ 完成（2026-08-23）
 - [x] `blend moe-layer`：读 router + 128 专家（按分片批量 mmap），真实 top-8 softmax
 - [x] Qwen3-30B-A3B 层 0，4 token：
