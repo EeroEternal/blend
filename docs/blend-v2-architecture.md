@@ -278,3 +278,41 @@ blend control --worker http://127.0.0.1:1930 \
 | **:1940** | **TP=2 GPU0+1** | **83+83 GB** | **~150 tok/s** |
 
 30B 单卡已能放下，TP=2 速度没有数量级提升（通信开销），价值是 **一份权重大模型/更长 KV**。control 用 `#tp=2,label=` 标注，不把 TP 组拆成两个 replica。
+
+
+---
+
+## 13. V2.3 / 并发分拓扑 / spawn（2026-08-23）
+
+### 前缀 + 同 session
+
+- control 维护 `sid:*` / `pfx:*` → worker；无 session 时按对话前缀找回有 KV 的那台
+- `GET /v1/routes` 看绑定数量
+- `blend bench-session`：流式、TTFT=首个 `content`/`reasoning_content`
+- 长前缀（`BLEND_SESSION_PAD=8000`）同 session：
+
+  | turn | TTFT | worker |
+  |---|---|---|
+  | 1 | **2205 ms**（冷 prefill） | 1932 |
+  | 2–4 | **1023 ms** | 同一 1932 |
+
+  少了约 1.2s prefill。剩余 ~1s 是思考流启动，不是没钉住。
+
+- `--fresh` 每轮换 session，会打到不同 worker。
+
+### 分拓扑饱和（`bench-conc`，max_tokens=64）
+
+| 拓扑 | N=1 | N=2 | N=4 agg | N=4 p50 |
+|---|---|---|---|---|
+| 单 replica `:1930` | 43 | 83 | **161** | 1.6s |
+| TP=2 `:1940` | 46 | 88 | **172** | 1.5s |
+| control 三 worker 混打 | 43 | 84 | 70 | **3.5s** |
+
+单卡/TP2 在 N=4 仍能靠 batch 把总量拉上去；经网关混打 replica+TP 时延先爆。
+
+### spawn
+
+```bash
+blend spawn --model ~/models/Qwen3-30B-A3B-Instruct --gpus 0,1 --tp 2 --port 1940
+# 打印 pid 和应登记的 --worker 串
+```
