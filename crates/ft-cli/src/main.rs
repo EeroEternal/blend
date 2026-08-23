@@ -17,6 +17,8 @@ enum Cmd {
         hidden: usize,
         #[arg(long, default_value_t = 128)]
         inter: usize,
+        #[arg(long, default_value_t = 20)]
+        iters: usize,
     },
     /// 实测 PCIe H2D 带宽（需 --features cuda）
     PcieBench {
@@ -130,8 +132,8 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
     match Cli::parse().cmd {
-        Cmd::GpuFfnParity { hidden, inter } => {
-            gpu_ffn_parity::run(hidden, inter)?;
+        Cmd::GpuFfnParity { hidden, inter, iters } => {
+            gpu_ffn_parity::run(hidden, inter, iters)?;
         }
         Cmd::PcieBench { mib, iters } => {
             pcie_bench::run(mib, iters)?;

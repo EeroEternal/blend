@@ -1,5 +1,5 @@
 //! 单专家 SwiGLU：GPU bf16 GEMV vs CPU naive，数值对拍。
-pub fn run(hidden: usize, inter: usize) -> anyhow::Result<()> {
+pub fn run(hidden: usize, inter: usize, iters: usize) -> anyhow::Result<()> {
     #[cfg(not(feature = "cuda"))]
     {
         let _ = (hidden, inter);
@@ -55,6 +55,31 @@ pub fn run(hidden: usize, inter: usize) -> anyhow::Result<()> {
             h, i, 1.0, &stream,
         )?;
         stream.sync()?;
+        // 吞吐：预热后计时
+        for _ in 0..2 {
+            gpu_zero(&mut d_y, h, &stream)?;
+            expert_ffn(
+                d_slot.as_ptr() as *const u16,
+                &d_x, &mut d_y, &mut d_s2, &mut d_si,
+                h, i, 1.0, &stream,
+            )?;
+        }
+        stream.sync()?;
+        let t0 = std::time::Instant::now();
+        for _ in 0..iters {
+            gpu_zero(&mut d_y, h, &stream)?;
+            expert_ffn(
+                d_slot.as_ptr() as *const u16,
+                &d_x, &mut d_y, &mut d_s2, &mut d_si,
+                h, i, 1.0, &stream,
+            )?;
+        }
+        stream.sync()?;
+        let ms = t0.elapsed().as_secs_f64() * 1000.0 / iters.max(1) as f64;
+        // 每专家读 w13(2I*H)+w2(H*I) bf16
+        let bytes = ((2 * i * h + h * i) * 2) as f64;
+        println!("gpu-ffn-bench: {ms:.2} ms/expert, {:.1} GB/s", bytes / (ms / 1000.0) / 1e9);
+
         let mut y_gpu = vec![0f32; h];
         d_y.d2h(&mut y_gpu)?;
 

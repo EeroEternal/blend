@@ -43,16 +43,24 @@ __device__ __forceinline__ float d_bf16_f32(uint16_t v) {
 }
 
 // out[row] = dot(w[row, 0:cols], x[0:cols])  w 为 bf16 行主
+// x 搬进 smem，避免每个 output row 的 block 都从 HBM 重读激活。
 __global__ void gemv_bf16_kernel(const uint16_t* w, const float* x, float* out,
                                  int rows, int cols) {
+    extern __shared__ float xs[];
+    for (int j = threadIdx.x; j < cols; j += blockDim.x) xs[j] = x[j];
+    __syncthreads();
     int row = blockIdx.x;
     if (row >= rows) return;
     const uint16_t* wr = w + static_cast<size_t>(row) * cols;
     float acc = 0.f;
-    for (int j = threadIdx.x; j < cols; j += blockDim.x) {
-        acc += d_bf16_f32(wr[j]) * x[j];
+    // 一次走 2 个 bf16，提高指令密度
+    int j = threadIdx.x * 2;
+    const int stride = blockDim.x * 2;
+    for (; j + 1 < cols; j += stride) {
+        acc += d_bf16_f32(wr[j]) * xs[j];
+        acc += d_bf16_f32(wr[j + 1]) * xs[j + 1];
     }
-    // block reduce
+    if (j < cols) acc += d_bf16_f32(wr[j]) * xs[j];
     __shared__ float sm[256];
     sm[threadIdx.x] = acc;
     __syncthreads();
@@ -88,10 +96,12 @@ int ft_gpu_expert_ffn(const uint16_t* slot, const float* x, float* y,
                       int H, int I, float rw, cudaStream_t stream) {
     const uint16_t* w13 = slot;
     const uint16_t* w2 = slot + static_cast<size_t>(2 * I) * H;
-    gemv_bf16_kernel<<<I * 2, 256, 0, stream>>>(w13, x, scratch_2i, 2 * I, H);
+    const size_t smem_h = static_cast<size_t>(H) * sizeof(float);
+    const size_t smem_i = static_cast<size_t>(I) * sizeof(float);
+    gemv_bf16_kernel<<<I * 2, 256, smem_h, stream>>>(w13, x, scratch_2i, 2 * I, H);
     silu_mul_kernel<<<(I + 255) / 256, 256, 0, stream>>>(scratch_2i, scratch_i, I);
-    // down: tmp_h[H] 需要第三块 scratch——复用 scratch_2i 的前 H（H <= 2I 对 DSV4/GLM 成立）
-    gemv_bf16_kernel<<<H, 256, 0, stream>>>(w2, scratch_i, scratch_2i, H, I);
+    // down: tmp_h[H] 复用 scratch_2i 前 H 个 float（H <= 2I 对 DSV4/GLM 成立）
+    gemv_bf16_kernel<<<H, 256, smem_i, stream>>>(w2, scratch_i, scratch_2i, H, I);
     axpy_kernel<<<(H + 255) / 256, 256, 0, stream>>>(y, scratch_2i, rw, H);
     return cudaGetLastError() == cudaSuccess ? 0 : -1;
 }
