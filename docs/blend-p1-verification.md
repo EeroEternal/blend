@@ -71,3 +71,32 @@ POST /v1/chat/completions → "linux smoke test [done]"                 ✅
 2. 在本机构建 `libftkernels.so`：fork FreeToken `kernel/csrc`（CUDA 13 工具链已就绪 `/usr/local/cuda-13.0`）
 3. cudarc 接入：第一个真实 GPU kernel 调用走通 FFI 链路
 4. rayon 线程池按物理核数配置 + core pinning（吸收本次 128t 教训）
+
+---
+
+## 7. P2 里程碑：GPU FFI 全链路打通（追加于同日）
+
+**目标**：验证 Rust → FFI → libftkernels.so → CUDA 内核 → RTX PRO 6000 的完整链路。
+
+| 步骤 | 结果 |
+|---|---|
+| `kernels/basic/kernels.cu` → nvcc (sm_100) → `libftkernels.so` | ✅ 988KB |
+| `ft-kernel-sys`（cuda feature）：CUDA runtime 绑定 + ft_vector_add 声明 | ✅ |
+| `ft-kernel`：DevBuffer RAII（cudaMalloc/cudaFree）+ H2D/D2H + 安全封装 | ✅ |
+| `blend gpu-smoke`：8 卡枚举 → vector_add 4096 元素校验 | ✅ PASS |
+| 空闲卡验证：`CUDA_VISIBLE_DEVICES=4` + 1M 元素校验 | ✅ PASS |
+
+### 过程中的坑
+
+1. **build script cwd ≠ linker cwd**：`cargo:rustc-link-search` 的相对路径以
+   rustc/linker 的 cwd（workspace 根）解析，而 build.rs 自身 cwd 是 crate 目录。
+   必须从 `CARGO_MANIFEST_DIR` 推导绝对路径。
+2. **macOS 无法构建 cuda feature**（预期行为）：libcudart/libftkernels 仅存在于
+   Linux+CUDA 环境；本地默认构建不受影响。
+
+### P2 剩余
+
+- [ ] 吸收 FreeToken csrc 的 cpu_moe AVX512BF16 内核进 libftkernels.so，与
+      NaiveF32Executor 对拍（golden 已就绪）
+- [ ] cudarc 接入（stream/graph/module API），为 Triton AOT cubin 加载做准备
+- [ ] rayon 物理核 pinning（见 docs/pitfall-smt-bandwidth.md）
