@@ -312,12 +312,7 @@ fn attention(
 ) -> Vec<f32> {
     let hq = HEADS * HEAD_DIM;
     let hk = KV_HEADS * HEAD_DIM;
-    #[cfg(feature = "cuda")]
-    if let Some(g) = gpu.as_mut() {
-        if let Ok(o) = g.decode_attn(layer_id, x, pos) {
-            return o;
-        }
-    }
+    // decode_attn（全 GPU softmax）短序列启动开销更大，默认走 QKV 批处理 + CPU softmax。
     let (q, k, v) = {
         #[cfg(feature = "cuda")]
         {
