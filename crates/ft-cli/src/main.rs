@@ -94,6 +94,33 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         threads: usize,
     },
+    /// 同 session 多轮，测 TTFT（验证前缀钉在同一 worker）
+    BenchSession {
+        #[arg(long, default_value = "http://127.0.0.1:8080")]
+        url: String,
+        #[arg(long, default_value = "Qwen3-30B-A3B-Instruct")]
+        model: String,
+        #[arg(long, default_value_t = 6)]
+        turns: usize,
+        #[arg(long, default_value_t = 48)]
+        max_tokens: usize,
+        /// 每轮换 session（对照：无前缀命中）
+        #[arg(long, default_value_t = false)]
+        fresh: bool,
+    },
+    /// 拉起一个 ft serve worker（写 pid，不阻塞）
+    Spawn {
+        #[arg(long)]
+        model: String,
+        #[arg(long, default_value = "0")]
+        gpus: String,
+        #[arg(long, default_value_t = 1)]
+        tp: usize,
+        #[arg(long, default_value_t = 1940)]
+        port: u16,
+        #[arg(long, default_value = "ft")]
+        bin: String,
+    },
     /// 并发考核：扫 N 路同时请求，报聚合 tok/s 与时延分位
     BenchConc {
         #[arg(long, default_value = "http://127.0.0.1:8080")]
@@ -218,6 +245,13 @@ fn main() -> anyhow::Result<()> {
         Cmd::DecodeSmoke { steps, layers, full, threads } => {
             decode_smoke::run(steps, layers, full, threads);
         }
+        Cmd::BenchSession { url, model, turns, max_tokens, fresh } => {
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+            rt.block_on(bench_session::run(url, model, turns, max_tokens, !fresh))?;
+        }
+        Cmd::Spawn { model, gpus, tp, port, bin } => {
+            spawn_ft(&bin, &model, &gpus, tp, port)?;
+        }
         Cmd::BenchConc { url, model, concurrency, max_tokens, prompt } => {
             let list = bench_conc::parse_list(&concurrency);
             if list.is_empty() {
@@ -279,6 +313,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 mod bench_conc;
+mod bench_session;
 mod decode_qwen;
 mod decode_smoke;
 mod gpu_ffn_parity;
@@ -291,6 +326,31 @@ mod real_expert;
 mod mem_bench;
 mod moe_bench;
 mod parity;
+
+fn spawn_ft(bin: &str, model: &str, gpus: &str, tp: usize, port: u16) -> anyhow::Result<()> {
+    use std::process::{Command, Stdio};
+    let log = format!("/tmp/blend-worker-{port}.log");
+    let file = std::fs::File::create(&log)?;
+    let mut cmd = Command::new(bin);
+    cmd.arg("serve")
+        .arg("--model")
+        .arg(model)
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .env("CUDA_VISIBLE_DEVICES", gpus)
+        .stdout(Stdio::from(file.try_clone()?))
+        .stderr(Stdio::from(file));
+    if tp > 1 {
+        cmd.arg("--tp-size").arg(tp.to_string());
+    }
+    let child = cmd.spawn()?;
+    println!("spawned pid={}  gpus={gpus} tp={tp} port={port}  log={log}", child.id());
+    println!("register: --worker http://127.0.0.1:{port}{}", if tp > 1 { format!("#tp={tp}") } else { String::new() });
+    std::mem::forget(child);
+    Ok(())
+}
 
 fn expand_tilde(p: &str) -> String {
     if let Some(rest) = p.strip_prefix("~/") {

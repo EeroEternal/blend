@@ -13,9 +13,10 @@ use axum::{
 };
 use futures_core::Stream;
 use std::pin::Pin;
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::task::{Context, Poll};
 
@@ -62,6 +63,8 @@ struct Inner {
     rr: AtomicUsize,
     inflight: Vec<AtomicUsize>,
     hits: Vec<AtomicUsize>,
+    /// session / 对话前缀 → worker 下标（Agent 多轮钉在有 KV 的那台）
+    route: Mutex<HashMap<String, usize>>,
 }
 
 impl Gateway {
@@ -87,6 +90,7 @@ impl Gateway {
                 rr: AtomicUsize::new(0),
                 inflight: (0..n).map(|_| AtomicUsize::new(0)).collect(),
                 hits: (0..n).map(|_| AtomicUsize::new(0)).collect(),
+                route: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -95,19 +99,48 @@ impl Gateway {
         Router::new()
             .route("/healthz", get(healthz))
             .route("/v1/workers", get(workers))
+            .route("/v1/routes", get(routes))
             .fallback(any(proxy))
             .with_state(self)
     }
 
-    fn pick_idx(&self, headers: &HeaderMap) -> usize {
-        if let Some(key) = headers
-            .get("x-blend-session")
-            .or_else(|| headers.get("x-session-id"))
-            .and_then(|v| v.to_str().ok())
-        {
-            return hash_str(key) % self.inner.workers.len();
+    fn bind(&self, key: &str, idx: usize) {
+        self.inner.route.lock().unwrap().insert(key.to_string(), idx);
+    }
+
+    fn lookup(&self, key: &str) -> Option<usize> {
+        self.inner.route.lock().unwrap().get(key).copied()
+    }
+
+    fn pick_idx(&self, headers: &HeaderMap, body: &[u8]) -> usize {
+        let n = self.inner.workers.len();
+        if let Some(sid) = session_id(headers) {
+            if let Some(i) = self.lookup(&format!("sid:{sid}")) {
+                return i;
+            }
+            let i = hash_str(sid) % n;
+            self.bind(&format!("sid:{sid}"), i);
+            if let Some(pk) = prefix_key(body) {
+                self.bind(&format!("pfx:{pk}"), i);
+            }
+            if let Some(fk) = full_key(body) {
+                self.bind(&format!("pfx:{fk}"), i);
+            }
+            return i;
         }
-        self.inner.rr.fetch_add(1, Ordering::Relaxed) % self.inner.workers.len()
+        if let Some(pk) = prefix_key(body) {
+            if let Some(i) = self.lookup(&format!("pfx:{pk}")) {
+                if let Some(fk) = full_key(body) {
+                    self.bind(&format!("pfx:{fk}"), i);
+                }
+                return i;
+            }
+        }
+        let i = self.inner.rr.fetch_add(1, Ordering::Relaxed) % n;
+        if let Some(fk) = full_key(body) {
+            self.bind(&format!("pfx:{fk}"), i);
+        }
+        i
     }
 }
 
@@ -147,24 +180,61 @@ async fn workers(State(gw): State<Gateway>) -> impl IntoResponse {
     Json(serde_json::json!({ "workers": list }))
 }
 
+async fn routes(State(gw): State<Gateway>) -> impl IntoResponse {
+    let map = gw.inner.route.lock().unwrap();
+    Json(serde_json::json!({ "bindings": map.len(), "keys": map.keys().take(32).cloned().collect::<Vec<_>>() }))
+}
+
+fn session_id(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("x-blend-session")
+        .or_else(|| headers.get("x-session-id"))
+        .and_then(|v| v.to_str().ok())
+}
+
+fn messages_text(body: &[u8]) -> Option<Vec<String>> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let arr = v.get("messages")?.as_array()?;
+    Some(
+        arr.iter()
+            .filter_map(|m| m.get("content").and_then(|c| c.as_str()).map(|s| s.to_string()))
+            .collect(),
+    )
+}
+
+fn prefix_key(body: &[u8]) -> Option<String> {
+    let msgs = messages_text(body)?;
+    if msgs.len() < 2 {
+        return None;
+    }
+    Some(msgs[..msgs.len() - 1].join("\n"))
+}
+
+fn full_key(body: &[u8]) -> Option<String> {
+    let msgs = messages_text(body)?;
+    if msgs.is_empty() {
+        return None;
+    }
+    Some(msgs.join("\n"))
+}
+
 async fn proxy(State(gw): State<Gateway>, req: Request) -> Response {
     let method = req.method().clone();
     let headers = req.headers().clone();
     let uri = req.uri().clone();
     let path_q = path_and_query(&uri);
-    let idx = gw.pick_idx(&headers);
-    let worker = gw.inner.workers[idx].url.clone();
-    gw.inner.inflight[idx].fetch_add(1, Ordering::Relaxed);
-    gw.inner.hits[idx].fetch_add(1, Ordering::Relaxed);
-    let url = format!("{worker}{path_q}");
-    let _guard = InflightGuard { inner: gw.inner.clone(), idx };
-
     let body = match axum::body::to_bytes(req.into_body(), 16 * 1024 * 1024).await {
         Ok(b) => b,
         Err(e) => {
             return (StatusCode::BAD_REQUEST, format!("read body: {e}")).into_response();
         }
     };
+    let idx = gw.pick_idx(&headers, &body);
+    let worker = gw.inner.workers[idx].url.clone();
+    gw.inner.inflight[idx].fetch_add(1, Ordering::Relaxed);
+    gw.inner.hits[idx].fetch_add(1, Ordering::Relaxed);
+    let url = format!("{worker}{path_q}");
+    let _guard = InflightGuard { inner: gw.inner.clone(), idx };
 
     let mut wreq = gw.inner.client.request(method, &url);
     for (k, v) in headers.iter() {
