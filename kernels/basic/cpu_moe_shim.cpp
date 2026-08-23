@@ -144,8 +144,9 @@ int ft_cpu_moe_bf16(float* h, const uint16_t* w13, const uint16_t* w2,
   std::vector<bf16_t> xb(static_cast<size_t>(T) * H);
   for (size_t i = 0; i < xb.size(); ++i) xb[i] = f32_to_bf16(h[i]);
 
-  // 中间层 [T,K,2I]：pass1 存 gate/up 原始点积
+  // 中间层：pass1 存 gate/up 原始点积到 g [T,K,2I]；融合后写 mid [T,K,I]
   std::vector<bf16_t> g(static_cast<size_t>(T) * K * 2 * I);
+  std::vector<bf16_t> mid(static_cast<size_t>(T) * K * I);
 
   const dot_fn dot = select_dot();
   const int nth = threads > 1 ? threads : 1;
@@ -179,12 +180,16 @@ int ft_cpu_moe_bf16(float* h, const uint16_t* w13, const uint16_t* w2,
 
   pass1();
 
-  // 激活融合（单遍顺序，带宽占比极小）：mid = silu(gate)*up 就地压缩到前半
-  const int64_t act_total = static_cast<int64_t>(T) * K * I;
-  for (int64_t idx = 0; idx < act_total; ++idx) {
-    const bf16_t gate = g[idx * 2];
-    const bf16_t up = g[idx * 2 + 1];
-    g[idx] = f32_to_bf16(act_silu(bf16_to_f32(gate)) * bf16_to_f32(up));
+  // 激活融合：mid[t,j,i] = silu(gate) * up
+  // 布局：g 内 (t,j) 块占 2I —— gate 在 [base+i]，up 在 [base+I+i]
+  for (int ti = 0; ti < T; ++ti) {
+    for (int j = 0; j < K; ++j) {
+      const bf16_t* src = &g[(static_cast<size_t>(ti) * K + j) * 2 * I];
+      bf16_t* dst = &mid[(static_cast<size_t>(ti) * K + j) * I];
+      for (int i = 0; i < I; ++i) {
+        dst[i] = f32_to_bf16(act_silu(bf16_to_f32(src[i])) * bf16_to_f32(src[I + i]));
+      }
+    }
   }
 
   auto pass2 = [&]() {
@@ -197,7 +202,7 @@ int ft_cpu_moe_bf16(float* h, const uint16_t* w13, const uint16_t* w2,
         const int t = static_cast<int>(task / H);
         const int o = static_cast<int>(task % H);
         float acc = 0.0f;
-        const bf16_t* gv = g.data() + static_cast<size_t>(t) * K * I;
+        const bf16_t* gv = mid.data() + static_cast<size_t>(t) * K * I;
         for (int j = 0; j < K; ++j) {
           const int e = ids[static_cast<size_t>(t) * K + j];
           if (e < 0 || e >= E) continue;
