@@ -20,4 +20,15 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib=cudart");
         println!("cargo:rustc-link-lib=dylib=ftkernels");
     }
+    if std::env::var("CARGO_FEATURE_CPU_SIMD").is_ok() {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+            .expect("CARGO_MANIFEST_DIR");
+        let default_kernels = std::path::Path::new(&manifest_dir)
+            .join("../../kernels/build");
+        let dir = std::env::var("FT_KERNELS_DIR").unwrap_or_else(|_| {
+            default_kernels.display().to_string()
+        });
+        println!("cargo:rustc-link-search=native={dir}");
+        println!("cargo:rustc-link-lib=dylib=ftcpu");
+    }
 }

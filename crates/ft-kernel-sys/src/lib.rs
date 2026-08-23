@@ -59,3 +59,28 @@ pub mod ffi {
     /// 所有调用方必须走 ft-kernel 的安全层并在运行时检查后端可用性。
     pub const _PLACEHOLDER: u8 = 0;
 }
+
+#[cfg(feature = "cpu-simd")]
+pub mod cpusimd {
+    //! CPU AVX512BF16 MoE shim（libftcpu.so，无 CUDA 依赖）。
+    use std::os::raw::{c_char, c_int};
+
+    extern "C" {
+        pub fn ft_cpu_isa_name() -> *const c_char;
+        /// bf16 MoE 前向；h [T,H] in/out f32，w13 [E,2I,H] w2 [E,H,I] bf16，
+        /// ids [T,K]（负值跳过），rw [T,K]。返回 0 成功。
+        pub fn ft_cpu_moe_bf16(
+            h: *mut f32,
+            w13: *const u16,
+            w2: *const u16,
+            ids: *const i32,
+            rw: *const f32,
+            t: c_int,
+            hidden: c_int,
+            inter: c_int,
+            num_experts: c_int,
+            k: c_int,
+            threads: c_int,
+        ) -> c_int;
+    }
+}

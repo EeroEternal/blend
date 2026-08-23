@@ -36,6 +36,9 @@ enum Cmd {
         dir: String,
         #[arg(long, default_value_t = 1e-3)]
         tol: f32,
+        /// naive | simd（BF16 口径建议 tol ≥ 1e-2）
+        #[arg(long, default_value = "naive")]
+        kernel: String,
     },
     /// 多线程内存读带宽（STREAM-like），用于标定 q\* 画像的 cpu_gbps
     MemBench {
@@ -55,6 +58,9 @@ enum Cmd {
     },
     /// CPU MoE 执行器吞叶基准（DSV4 形状默认值）
     MoeBench {
+        /// naive | simd（simd 需 --features cpu-simd 构建）
+        #[arg(long, default_value = "naive")]
+        kernel: String,
         #[arg(long, default_value_t = 8)]
         tokens: usize,
         #[arg(long, default_value_t = 4096)]
@@ -102,11 +108,11 @@ fn main() -> anyhow::Result<()> {
                 path
             );
         }
-        Cmd::Parity { dir, tol } => {
-            parity::run(std::path::Path::new(&dir), tol)?;
+        Cmd::Parity { dir, tol, kernel } => {
+            parity::run(std::path::Path::new(&dir), tol, &kernel)?;
         }
-        Cmd::MoeBench { tokens, hidden, inter, experts, k, iters } => {
-            moe_bench::run(tokens, hidden, inter, experts, k, iters);
+        Cmd::MoeBench { kernel, tokens, hidden, inter, experts, k, iters } => {
+            moe_bench::run(&kernel, tokens, hidden, inter, experts, k, iters);
         }
         Cmd::MemBench { gib, iters, threads } => {
             mem_bench::run(gib, iters, threads);

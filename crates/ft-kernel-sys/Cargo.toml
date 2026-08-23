@@ -8,3 +8,5 @@ build = "build.rs"
 default = []
 # 启用后链接 libftkernels.so（CUDA 13 编译，见 kernels/ 目录）
 cuda = []
+# 启用后链接 libftcpu.so（g++ 编译的 CPU AVX512BF16 MoE shim）
+cpu-simd = []

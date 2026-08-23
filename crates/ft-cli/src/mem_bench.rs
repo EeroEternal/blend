@@ -8,8 +8,6 @@ pub fn run(gib: usize, iters: usize, threads: usize) {
         threads
     };
     let total = gib * (1 << 30);
-    // 每 chunk 大小为 cache line 对齐的整数
-    let per_thread = total / threads;
     let buf: Vec<u64> = vec![0x5555_5555_5555_5555u64; total / 8];
 
     // 预热一遍（触发页分配/缺页）

@@ -3,8 +3,6 @@
 //! 规则（架构文档 §5）：所有 unsafe 集中在这里，
 //! 对上暴露返回 Result 的安全 API，并做形状/设备校验。
 
-use ft_core::{FtError, Result};
-
 /// 内核后端可用性探测。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KernelBackend {
@@ -35,6 +33,7 @@ pub struct DeviceInfo {
 #[cfg(feature = "cuda")]
 mod gpu {
     use super::*;
+    use ft_core::{FtError, Result};
     use ft_kernel_sys::cuda as sys;
     use std::ffi::c_void;
 
@@ -136,6 +135,63 @@ mod gpu {
 
 #[cfg(feature = "cuda")]
 pub use gpu::{device_count, device_info, vector_add, DevBuffer};
+
+/// CPU SIMD MoE 执行器（libftcpu.so 的 AVX512BF16 shim）。
+#[cfg(feature = "cpu-simd")]
+pub mod cpu_simd {
+    use super::*;
+    use ft_core::{FtError, Result};
+    use ft_kernel_sys::cpusimd as sys;
+    use std::ffi::{c_void, CStr};
+
+    pub fn isa_name() -> String {
+        unsafe {
+            CStr::from_ptr(sys::ft_cpu_isa_name()).to_string_lossy().into_owned()
+        }
+    }
+
+    /// # Safety
+    /// w13/w2 长度须匹配 E*2I*H / E*H*I；ids 元素须在 [0,E) 或负值。
+    pub fn moe_bf16(
+        h: &mut [f32],
+        w13: &[u16],
+        w2: &[u16],
+        topk: &[i32],
+        rw: &[f32],
+        t: usize,
+        hidden: usize,
+        inter: usize,
+        num_experts: usize,
+        k: usize,
+        threads: usize,
+    ) -> Result<()> {
+        assert_eq!(h.len(), t * hidden);
+        assert_eq!(topk.len(), t * k);
+        let rc = unsafe {
+            sys::ft_cpu_moe_bf16(
+                h.as_mut_ptr() as *mut f32,
+                w13.as_ptr() as *const u16,
+                w2.as_ptr() as *const u16,
+                topk.as_ptr() as *const i32,
+                rw.as_ptr() as *const f32,
+                t as i32,
+                hidden as i32,
+                inter as i32,
+                num_experts as i32,
+                k as i32,
+                threads as i32,
+            )
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(FtError::Kernel(format!("ft_cpu_moe_bf16: {rc}")))
+        }
+    }
+}
+
+#[cfg(feature = "cpu-simd")]
+pub use cpu_simd::{isa_name as cpu_isa_name, moe_bf16};
 
 #[cfg(test)]
 mod tests {

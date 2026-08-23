@@ -6,6 +6,7 @@ edition.workspace = true
 [features]
 default = []
 cuda = ["ft-kernel-sys/cuda"]
+cpu-simd = ["ft-kernel-sys/cpu-simd"]
 
 [dependencies]
 ft-core = { workspace = true }
