@@ -59,8 +59,11 @@ pub async fn run(
                     continue;
                 }
                 if let Ok(v) = serde_json::from_str::<Value>(rest) {
-                    if let Some(c) = v["choices"][0]["delta"]["content"].as_str() {
-                        if !c.is_empty() && ttft.is_none() {
+                    let delta = &v["choices"][0]["delta"];
+                    let piece = delta["content"].as_str().filter(|s| !s.is_empty())
+                        .or_else(|| delta["reasoning_content"].as_str().filter(|s| !s.is_empty()));
+                    if let Some(c) = piece {
+                        if ttft.is_none() {
                             ttft = Some(t0.elapsed().as_secs_f64() * 1000.0);
                         }
                         acc.push_str(c);
