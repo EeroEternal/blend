@@ -142,7 +142,7 @@ pub fn run(steps: usize, layers: usize, cache_slots: usize, threads: usize, real
     let rw: Vec<f32> = vec![1.0 / k as f32; k];
 
     if real_pcie {
-        eprintln!("  real-pcie: ON (cudaMemcpyAsync, pageable host)");
+        eprintln!("  real-pcie: ON (cudaMemcpyAsync)");
     }
     let kernel = SimdKernel {
         w13, w2, h, rw, hidden, inter, experts, k, threads,
@@ -162,6 +162,19 @@ pub fn run(steps: usize, layers: usize, cache_slots: usize, threads: usize, real
         },
     };
     let mut drv = DecodeDriver::new(cache_slots, q, kernel, layers);
+    #[cfg(feature = "cuda")]
+    if let Some((bank, stream)) = drv.kernel.gpu.as_ref() {
+        let bytes = drv.kernel.bytes_per_expert as usize;
+        let t0 = Instant::now();
+        let _ = stream.h2d_async(bank.slot_ptr(0), drv.kernel.w13.as_ptr() as *const _, bytes.min(drv.kernel.w13.len() * 2));
+        let _ = stream.sync();
+        let dt = t0.elapsed().as_secs_f64();
+        eprintln!(
+            "  expert H2D probe: {:.2} ms, {:.1} GB/s",
+            dt * 1000.0,
+            bytes as f64 / dt / 1e9
+        );
+    }
 
     // 每层上一 token 的路由（时间局部性）
     let mut prev: Vec<Vec<u32>> = (0..layers)
