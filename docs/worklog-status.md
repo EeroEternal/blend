@@ -146,6 +146,16 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑪ Qwen3 真实 Transformer decode ✅ 完成（2026-08-23）
+- [x] RMSNorm + GQA（32/4 × d=128）+ Q/K RMSNorm + RoPE + KV cache
+- [x] 专家 MoE 仍走 AVX512BF16；注意力/QKV 为 CPU f32 GEMV
+- [x] 真机 Qwen3-30B-A3B：
+  | | 加载 | prefill 8 | decode |
+  |---|---|---|---|
+  | 8 层 | 7.9 s | 896 ms | **114.7 ms/tok (8.7 tok/s)** |
+  | **48 层** | 54 s | 5.6 s | **732 ms/tok (1.4 tok/s)** |
+- |h| 稳定（84–288），不再消失；瓶颈已从专家切到朴素注意力 GEMV
+
 ### ⑩ 全模型专家栈 decode ✅ 完成（2026-08-23）
 - [x] `blend moe-model`：48 层 × 128 专家全部装入（58 GB / 114 s）
 - [x] 真实 router + AVX512BF16，attention stub = 残差直通
