@@ -5,18 +5,21 @@ use ft_moe::{BandwidthProfile, HybridRuntime, MissAction, MoePlan, QStarPolicy};
 use std::time::Instant;
 
 #[cfg(feature = "cuda")]
-fn init_gpu_bank(
-    slot_bytes: usize,
-) -> anyhow::Result<(ft_kernel::GpuSlotBank, ft_kernel::Stream)> {
-    use ft_kernel::{device_count, set_device, GpuSlotBank, Stream};
+fn init_gpu_ctx(slot_bytes: usize, hidden: usize, inter: usize) -> anyhow::Result<GpuCtx> {
+    use ft_kernel::{device_count, set_device, DevBuffer, GpuSlotBank, Stream};
     let n = device_count()?;
     if n == 0 {
         anyhow::bail!("no CUDA device");
     }
     set_device((n as i32) - 1)?;
-    // 128 槽 × ~50MB ≈ 6.4GB，单卡 96GB 余量充足
-    let bank = GpuSlotBank::new(128, slot_bytes)?;
-    Ok((bank, Stream::new()?))
+    Ok(GpuCtx {
+        bank: GpuSlotBank::new(64, slot_bytes)?,
+        stream: Stream::new()?,
+        x: DevBuffer::alloc(hidden * 4)?,
+        y: DevBuffer::alloc(hidden * 4)?,
+        s2: DevBuffer::alloc(2 * inter * 4)?,
+        si: DevBuffer::alloc(inter * 4)?,
+    })
 }
 
 struct SimdKernel {
@@ -38,7 +41,17 @@ struct SimdKernel {
     real_pcie: bool,
     next_slot: usize,
     #[cfg(feature = "cuda")]
-    gpu: Option<(ft_kernel::GpuSlotBank, ft_kernel::Stream)>,
+    gpu: Option<GpuCtx>,
+}
+
+#[cfg(feature = "cuda")]
+struct GpuCtx {
+    bank: ft_kernel::GpuSlotBank,
+    stream: ft_kernel::Stream,
+    x: ft_kernel::DevBuffer,
+    y: ft_kernel::DevBuffer,
+    s2: ft_kernel::DevBuffer,
+    si: ft_kernel::DevBuffer,
 }
 
 impl MoeKernel for SimdKernel {
@@ -53,24 +66,9 @@ impl MoeKernel for SimdKernel {
                 n_fetch += 1;
                 let _ = expert_id;
                 #[cfg(feature = "cuda")]
-                if let Some((bank, stream)) = self.gpu.as_mut() {
+                if let Some(ctx) = self.gpu.as_mut() {
                     let e = *expert_id as usize;
-                    let w13_off = e * 2 * self.inter * self.hidden;
-                    let w2_off = e * self.hidden * self.inter;
-                    let w13_bytes = 2 * self.inter * self.hidden * 2;
-                    let slot = self.next_slot % bank.slots;
-                    self.next_slot += 1;
-                    let dst = bank.slot_ptr(slot);
-                    let _ = stream.h2d_async(
-                        dst,
-                        unsafe { self.w13.as_ptr().add(w13_off) } as *const _,
-                        w13_bytes,
-                    );
-                    let _ = stream.h2d_async(
-                        unsafe { (dst as *mut u8).add(w13_bytes) } as *mut _,
-                        unsafe { self.w2.as_ptr().add(w2_off) } as *const _,
-                        self.hidden * self.inter * 2,
-                    );
+                    upload_expert(ctx, &self.w13, &self.w2, e, self.hidden, self.inter, &mut self.next_slot);
                 }
             }
         }
@@ -93,15 +91,59 @@ impl MoeKernel for SimdKernel {
         }
         #[cfg(feature = "cuda")]
         if self.real_pcie {
-            if let Some((_, stream)) = self.gpu.as_ref() {
+            if let Some(ctx) = self.gpu.as_mut() {
                 let t1 = Instant::now();
-                let _ = stream.sync();
+                // 命中 + 本步 Fetch 的专家在 GPU 上算，累加到 y
+                let _ = ft_kernel::gpu_zero(&mut ctx.y, self.hidden, &ctx.stream);
+                let _ = ctx.x.h2d(&self.h);
+                let gpu_experts: Vec<u32> = plan
+                    .cache_hits
+                    .iter()
+                    .copied()
+                    .chain(plan.misses.iter().filter_map(|m| match m {
+                        MissAction::Fetch { expert_id } => Some(*expert_id),
+                        _ => None,
+                    }))
+                    .collect();
+                for e in gpu_experts {
+                    let slot = (e as usize) % ctx.bank.slots;
+                    let _ = ft_kernel::expert_ffn(
+                        ctx.bank.slot_ptr(slot) as *const u16,
+                        &ctx.x, &mut ctx.y, &mut ctx.s2, &mut ctx.si,
+                        self.hidden, self.inter, 1.0 / self.k as f32, &ctx.stream,
+                    );
+                }
+                let _ = ctx.stream.sync();
                 if self.counting {
                     self.real_pcie_ns += t1.elapsed().as_nanos() as u64;
                 }
             }
         }
     }
+}
+
+#[cfg(feature = "cuda")]
+fn upload_expert(
+    ctx: &GpuCtx,
+    w13: &[u16],
+    w2: &[u16],
+    e: usize,
+    hidden: usize,
+    inter: usize,
+    next_slot: &mut usize,
+) {
+    let w13_off = e * 2 * inter * hidden;
+    let w2_off = e * hidden * inter;
+    let w13_bytes = 2 * inter * hidden * 2;
+    let slot = *next_slot % ctx.bank.slots;
+    *next_slot += 1;
+    let dst = ctx.bank.slot_ptr(slot);
+    let _ = ctx.stream.h2d_async(dst, unsafe { w13.as_ptr().add(w13_off) } as *const _, w13_bytes);
+    let _ = ctx.stream.h2d_async(
+        unsafe { (dst as *mut u8).add(w13_bytes) } as *mut _,
+        unsafe { w2.as_ptr().add(w2_off) } as *const _,
+        hidden * inter * 2,
+    );
 }
 
 pub fn run(steps: usize, layers: usize, cache_slots: usize, threads: usize, real_pcie: bool) {
@@ -150,7 +192,7 @@ pub fn run(steps: usize, layers: usize, cache_slots: usize, threads: usize, real
         counting: false, real_pcie, next_slot: 0,
         #[cfg(feature = "cuda")]
         gpu: if real_pcie {
-            match init_gpu_bank(bytes_per_expert as usize) {
+            match init_gpu_ctx(bytes_per_expert as usize, hidden, inter) {
                 Ok(g) => Some(g),
                 Err(e) => {
                     eprintln!("  real-pcie init failed: {e}; falling back to modeled");
@@ -163,11 +205,11 @@ pub fn run(steps: usize, layers: usize, cache_slots: usize, threads: usize, real
     };
     let mut drv = DecodeDriver::new(cache_slots, q, kernel, layers);
     #[cfg(feature = "cuda")]
-    if let Some((bank, stream)) = drv.kernel.gpu.as_ref() {
+    if let Some(ctx) = drv.kernel.gpu.as_ref() {
         let bytes = drv.kernel.bytes_per_expert as usize;
         let t0 = Instant::now();
-        let _ = stream.h2d_async(bank.slot_ptr(0), drv.kernel.w13.as_ptr() as *const _, bytes.min(drv.kernel.w13.len() * 2));
-        let _ = stream.sync();
+        let _ = ctx.stream.h2d_async(ctx.bank.slot_ptr(0), drv.kernel.w13.as_ptr() as *const _, bytes.min(drv.kernel.w13.len() * 2));
+        let _ = ctx.stream.sync();
         let dt = t0.elapsed().as_secs_f64();
         eprintln!(
             "  expert H2D probe: {:.2} ms, {:.1} GB/s",
