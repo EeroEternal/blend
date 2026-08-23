@@ -333,9 +333,11 @@ fn attention(
     let hq = HEADS * HEAD_DIM;
     let hk = KV_HEADS * HEAD_DIM;
     #[cfg(feature = "cuda")]
-    if let Some(g) = gpu.as_mut() {
-        if let Ok(o) = g.decode_attn(layer_id, x, pos) {
-            return o;
+    if std::env::var_os("BLEND_FI").is_some() {
+        if let Some(g) = gpu.as_mut() {
+            if let Ok(o) = g.decode_attn(layer_id, x, pos) {
+                return o;
+            }
         }
     }
     let (q, k, v) = {

@@ -146,6 +146,14 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑰ FlashInfer 接入 ✅ 编译通过，默认未启用（2026-08-23）
+- [x] `kernels/basic/fi_single_decode.cu` 实例化 FI `SingleDecodeWithKVCacheDispatched<128, bf16>`
+- [x] 编进 `libftkernels.so`（需 flashinfer headers + libcudacxx）
+- [x] f32 实例化会踩 cp_async 512-bit 断言，已改 bf16
+- [x] 端到端 `BLEND_FI=1` 可走 FI；默认仍 QKV+CPU softmax
+- 短序列实测 FI 路径 8L ~56 tok/s < 默认 88（转换+逐 head RMSNorm 胶水更贵）
+- 下一步要把 KV 直接存 bf16、合并 RMSNorm，FI 才有机会赢
+
 ### ⑯ GPU 融合注意力尝试 ✅ 结论：短序列回退（2026-08-23）
 - [x] 实现 RMSNorm / RoPE / GQA decode / KV cache 的 CUDA 内核
 - [x] 真机对比（seq≈16）：
