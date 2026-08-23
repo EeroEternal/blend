@@ -18,7 +18,11 @@ if command -v nvcc >/dev/null 2>&1; then
       "$HOME/freetoken-venv/lib/python3.10/site-packages/flashinfer/data/include" \
       /usr/local/include; do
     if [ -n "$d" ] && [ -f "$d/flashinfer/attention/decode.cuh" ]; then
+      FI_ROOT=$(dirname "$d")
       FI_INC="-I$d -DFT_HAS_FLASHINFER=1"
+      [ -d "$FI_ROOT/cccl/libcudacxx/include" ] && FI_INC="$FI_INC -I$FI_ROOT/cccl/libcudacxx/include"
+      [ -d "$FI_ROOT/cccl/cub" ] && FI_INC="$FI_INC -I$FI_ROOT/cccl"
+      [ -d /usr/local/cuda-13.0/include/cccl ] && FI_INC="$FI_INC -I/usr/local/cuda-13.0/include/cccl"
       break
     fi
   done
