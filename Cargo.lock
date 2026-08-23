@@ -433,6 +433,7 @@ dependencies = [
  "ft-core",
  "ft-engine",
  "ft-kernel",
+ "ft-loader",
  "ft-memory",
  "ft-moe",
  "ft-server",

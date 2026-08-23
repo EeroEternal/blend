@@ -11,6 +11,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// 从 HF 目录加载真实专家权重并 CPU/GPU 对拍
+    RealExpert {
+        #[arg(long)]
+        model: String,
+        #[arg(long, default_value_t = 0)]
+        layer: usize,
+        #[arg(long, default_value_t = 0)]
+        expert: usize,
+    },
     /// 单专家 GPU SwiGLU vs CPU naive 对拍（需 --features cuda）
     GpuFfnParity {
         #[arg(long, default_value_t = 256)]
@@ -132,6 +141,9 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
     match Cli::parse().cmd {
+        Cmd::RealExpert { model, layer, expert } => {
+            real_expert::run(&model, layer, expert)?;
+        }
         Cmd::GpuFfnParity { hidden, inter, iters } => {
             gpu_ffn_parity::run(hidden, inter, iters)?;
         }
@@ -189,6 +201,7 @@ mod gpu_ffn_parity;
 mod gpu_smoke;
 mod hybrid_smoke;
 mod pcie_bench;
+mod real_expert;
 mod mem_bench;
 mod moe_bench;
 mod parity;

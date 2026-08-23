@@ -15,6 +15,19 @@ pub struct ModelDir {
 }
 
 /// 从 HF 目录布局解析模型（读 config.json，枚举 *.safetensors）。
+/// 从 model.safetensors.index.json 的 weight_map 解析张量所在分片。
+pub fn locate_tensor(root: &Path, name: &str) -> Result<PathBuf, FtError> {
+    let idx = root.join("model.safetensors.index.json");
+    let raw = std::fs::read_to_string(&idx)
+        .map_err(|e| FtError::Invalid(format!("read {}: {e}", idx.display())))?;
+    let v: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| FtError::Invalid(format!("index json: {e}")))?;
+    let shard = v["weight_map"][name]
+        .as_str()
+        .ok_or_else(|| FtError::Invalid(format!("tensor not in index: {name}")))?;
+    Ok(root.join(shard))
+}
+
 pub fn discover(root: &Path) -> Result<ModelDir, FtError> {
     let cfg_path = root.join("config.json");
     let raw = std::fs::read_to_string(&cfg_path)
@@ -112,6 +125,20 @@ impl<'a> TensorView<'a> {
             return Err(FtError::Invalid(format!("dtype {} not supported as f32", self.dtype)));
         }
         Ok(self.data.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect())
+    }
+
+    /// BF16 原始位；F16 同样按 2 字节取出。
+    pub fn as_u16(&self) -> Result<Vec<u16>, FtError> {
+        if self.dtype != "BF16" && self.dtype != "F16" {
+            return Err(FtError::Invalid(format!("dtype {} not u16", self.dtype)));
+        }
+        Ok(self.data.chunks_exact(2).map(|c| u16::from_le_bytes(c.try_into().unwrap())).collect())
+    }
+
+    /// BF16 → f32（左移 16 位）。
+    pub fn as_f32_from_bf16(&self) -> Result<Vec<f32>, FtError> {
+        let bits = self.as_u16()?;
+        Ok(bits.iter().map(|&b| f32::from_bits((b as u32) << 16)).collect())
     }
 
     pub fn numel(&self) -> usize {

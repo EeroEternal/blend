@@ -19,6 +19,7 @@ ft-bench = { workspace = true }
 ft-moe = { workspace = true }
 ft-engine = { workspace = true }
 ft-memory = { workspace = true }
+ft-loader = { workspace = true }
 ft-kernel = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
