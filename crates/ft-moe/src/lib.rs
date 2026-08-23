@@ -2,12 +2,14 @@
 
 pub mod cache;
 pub mod cpu;
+pub mod hybrid;
 pub mod plan;
 pub mod policy;
 pub mod topology;
 
 pub use cache::{ExpertKey, LruExpertCache};
 pub use cpu::{CpuMoeExecutor, NaiveF32Executor};
+pub use hybrid::{HybridRuntime, HybridStats};
 pub use plan::{MoePlan, MissAction};
 pub use policy::{BackendKind, BandwidthProfile, QStarPolicy};
 pub use topology::physical_cores;
