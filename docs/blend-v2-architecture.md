@@ -250,3 +250,31 @@ blend control --host 127.0.0.1 --port 8080 --worker http://127.0.0.1:1930
 | 双副本并发 | **140 + 127 ≈ 267 tok/s**（约 2.0×） |
 
 `/v1/workers` 暴露 inflight/hits；inflight 与流式 body 同寿命。
+
+
+---
+
+## 12. V2.2 落地（2026-08-23）
+
+停掉 cortex / nebula 占卡容器后，FreeToken `--tp-size 2` 在 GPU0+1 拉起同一份 Qwen3-30B。
+
+坑：venv 里只有 `libnccl.so.2`，JIT `pynccl` 链接要 `libnccl.so` 符号链接。
+
+```bash
+# NCCL
+ln -s libnccl.so.2 $VENV/lib/python3.10/site-packages/nvidia/nccl/lib/libnccl.so
+export LIBRARY_PATH=.../nvidia/nccl/lib LD_LIBRARY_PATH=...
+CUDA_VISIBLE_DEVICES=0,1 ft serve --model ~/models/Qwen3-30B-A3B-Instruct --tp-size 2 --port 1940
+
+blend control --worker http://127.0.0.1:1930 \
+              --worker http://127.0.0.1:1932 \
+              --worker 'http://127.0.0.1:1940#tp=2,label=qwen-tp2'
+```
+
+| worker | 放置 | 显存 | decode |
+|---|---|---|---|
+| :1930 | replica GPU4 | ~88 GB | ~140 tok/s |
+| :1932 | replica GPU5 | ~88 GB | ~127 tok/s |
+| **:1940** | **TP=2 GPU0+1** | **83+83 GB** | **~150 tok/s** |
+
+30B 单卡已能放下，TP=2 速度没有数量级提升（通信开销），价值是 **一份权重大模型/更长 KV**。control 用 `#tp=2,label=` 标注，不把 TP 组拆成两个 replica。
