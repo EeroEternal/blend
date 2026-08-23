@@ -49,6 +49,8 @@ pub fn run(steps: usize, layers: usize, cache_slots: usize, threads: usize) {
     let rw: Vec<f32> = vec![1.0 / k as f32; tokens * k];
 
     let mut cache = LruExpertCache::new(cache_slots);
+    // 每层上一 token 的路由，用于模拟时间局部性（论文图：8/12 hits from t-1）
+    let mut prev: Vec<Vec<u32>> = vec![vec![0u32; k]; layers];
     let mut hits = 0u64;
     let mut fetches = 0u64;
     let mut cpu_misses = 0u64;
@@ -56,12 +58,21 @@ pub fn run(steps: usize, layers: usize, cache_slots: usize, threads: usize) {
     let mut cpu_ns = 0u64;
 
     let wall = Instant::now();
-    for _step in 0..steps {
+    for step in 0..steps {
         for layer in 0..layers {
-            // 伪路由：每步每层独立抽 k 个专家（时间局部性：80% 复用上一层的子集）
-            let routed: Vec<u32> = (0..k)
-                .map(|i| ((rnd() as usize).wrapping_add(layer * 17 + i * 3) % experts) as u32)
-                .collect();
+            // 时间局部性：约 2/3 复用上一 token 的专家，其余替换（对齐 8/12 hits）
+            let mut routed = prev[layer].clone();
+            if step == 0 {
+                for i in 0..k {
+                    routed[i] = ((rnd() as usize).wrapping_add(layer * 17 + i * 31) % experts) as u32;
+                }
+            } else {
+                let n_replace = (k + 2) / 3; // ≈ 2 of 6
+                for i in 0..n_replace {
+                    routed[i] = ((rnd() as usize).wrapping_add(layer * 13 + i * 7) % experts) as u32;
+                }
+            }
+            prev[layer] = routed.clone();
 
             let is_cached = |e: u32| cache.contains(ExpertKey { layer: layer as u32, expert: e });
             let plan = MoePlan::build(&routed, is_cached, &q);
