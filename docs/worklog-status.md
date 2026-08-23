@@ -146,6 +146,17 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑭ QKV 合并发射 + q* 重叠 ✅ 完成（2026-08-23）
+- [x] Q/K/V 一次 H2D、三个 GEMV、一次 sync（少 2 次同步）
+- [x] GPU 专家 FFN 与 CPU miss 重叠（先 launch 再 moe_bf16 再 sync）
+- [x] 真机：
+
+  | | 之前 | **现在** |
+  |---|---|---|
+  | 8 层 | 57.8 tok/s | **88.1 tok/s** |
+  | 48 层 | 9.3 tok/s | **8.6 tok/s**（波动，未再升） |
+  | 8L prefill | 175 ms | **114 ms** |
+
 ### ⑬ decode-qwen 接 hybrid MoE ✅ 完成（2026-08-23）
 - [x] 热专家上传并常驻 GpuSlotBank（384 槽）；miss 走 AVX512
 - [x] 真机 Qwen3-30B 48 层（prompt=8, gen=8）：
