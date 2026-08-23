@@ -146,6 +146,20 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑮ 同模型基线：FreeToken vs blend（Qwen3-30B-A3B）✅ 完成（2026-08-23）
+同卡 GPU4、同一份权重 `~/models/Qwen3-30B-A3B-Instruct`、都是 BF16：
+
+| | 后端 | 注意力 | 稳态 decode |
+|---|---|---|---|
+| **FreeToken 0.1.2** | offload，cache=6144，CUDA Graph | FlashInfer | **111–132 tok/s** |
+| **blend decode-qwen** | hybrid 384 槽 + AVX512 miss | GPU GEMV + CPU softmax | **~9 tok/s** |
+
+差距约 **14×**。此模型上 **不是 FP4 的锅**（两边都是 BF16）。差在：
+1. FlashInfer 融合注意力 vs 我们的 GEMV+CPU softmax
+2. CUDA Graph 整步 vs 每层多次 sync/D2H
+3. 专家在 GPU 上用他们的 fused MoE kernel，不是逐专家朴素 SwiGLU
+4. 6144 槽几乎覆盖全部专家，miss 极少
+
 ### ⑭ QKV 合并发射 + q* 重叠 ✅ 完成（2026-08-23）
 - [x] Q/K/V 一次 H2D、三个 GEMV、一次 sync（少 2 次同步）
 - [x] GPU 专家 FFN 与 CPU miss 重叠（先 launch 再 moe_bf16 再 sync）

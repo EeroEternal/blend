@@ -269,3 +269,16 @@ CUDA_VISIBLE_DEVICES=5 nohup ft serve --model ~/models/GLM-5.2-NVFP4 --host 0.0.
 tail -f ~/ft_serve_dsv4.log ~/ft_serve_glm.log
 nvidia-smi; free -h
 ```
+
+---
+
+## 9. 同模型对照：blend vs FreeToken（2026-08-23 补测）
+
+模型：`Qwen3-30B-A3B-Instruct`（BF16），GPU：同一张 RTX PRO 6000 #4。
+
+| 引擎 | decode |
+|---|---|
+| FreeToken 0.1.2（offload + FlashInfer + CUDA Graph） | **111–132 tok/s** |
+| blend `decode-qwen`（GPU GEMV attn + hybrid MoE） | **~9 tok/s** |
+
+结论：同精度同权重下 blend 慢约 14×。优先补融合注意力与 CUDA Graph，而不是先做 FP4。
