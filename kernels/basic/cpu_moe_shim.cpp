@@ -9,6 +9,9 @@
 #include <cstring>
 #include <cmath>
 #include <atomic>
+#include <functional>
+#include <condition_variable>
+#include <mutex>
 #include <thread>
 #include <vector>
 #include <cstdlib>
@@ -173,6 +176,73 @@ static void pin_to(int idx) {
 #endif
 }
 
+/// 进程级持久工作池：消除每调用 spawn/join 开销（DSV4 形状下约数 ms/步）。
+/// 线程数由首次调用确定；主线程作为 0 号参与者。单线程调用方假设（engine 为单线程循环）。
+class WorkerPool {
+ public:
+  static WorkerPool& get(int participants) {
+    static WorkerPool pool(participants > 1 ? participants : 1);
+    return pool;
+  }
+
+  void run(const std::function<void()>& body) {
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      body_ = &body;
+      ++gen_;
+    }
+    cv_work_.notify_all();
+    body();  // 主线程 = 0 号参与者
+    if (n_workers_ == 0) return;
+    std::unique_lock<std::mutex> lk(m_);
+    cv_done_.wait(lk, [&] { return acked_ == static_cast<uint64_t>(n_workers_); });
+    acked_ = 0;
+  }
+
+  ~WorkerPool() {
+    {
+      std::lock_guard<std::mutex> lk(m_);
+      stop_ = true;
+    }
+    cv_work_.notify_all();
+    for (auto& th : ths_) th.join();
+  }
+
+ private:
+  explicit WorkerPool(int participants)
+      : n_workers_(participants - 1) {
+    for (int i = 1; i < participants; ++i) {
+      ths_.emplace_back([this, i] {
+        pin_to(i);
+        uint64_t seen = 0;
+        for (;;) {
+          {
+            std::unique_lock<std::mutex> lk(m_);
+            cv_work_.wait(lk, [&] { return stop_ || gen_ > seen; });
+            if (stop_) return;
+            seen = gen_;
+          }
+          (*body_)();
+          {
+            std::lock_guard<std::mutex> lk(m_);
+            ++acked_;
+          }
+          cv_done_.notify_all();
+        }
+      });
+    }
+  }
+
+  std::vector<std::thread> ths_;
+  std::mutex m_;
+  std::condition_variable cv_work_, cv_done_;
+  const std::function<void()>* body_ = nullptr;
+  uint64_t gen_ = 0;
+  uint64_t acked_ = 0;
+  int n_workers_;
+  bool stop_ = false;
+};
+
 /// bf16 MoE 前向。返回 0 成功，非 0 参数错误。
 /// 布局：w13 [E,2I,H]、w2 [E,H,I]（行主）、ids [T,K]（负值跳过）、rw [T,K]、h [T,H] in/out。
 /// 两阶段行级并行：pass1 按 (t,j,row) 算 gate/up；激活融合；pass2 按 (t,o) 行算输出，
@@ -214,12 +284,7 @@ int ft_cpu_moe_bf16(float* h, const uint16_t* w13, const uint16_t* w2,
             f32_to_bf16(v);
       }
     };
-    std::vector<std::thread> ths;
-    ths.reserve(nth - 1);
-    for (int i = 1; i < nth; ++i)
-      ths.emplace_back([&, i] { pin_to(i); body(); });
-    body();
-    for (auto& th : ths) th.join();
+    WorkerPool::get(nth).run(body);
   };
 
   pass1();
@@ -258,12 +323,7 @@ int ft_cpu_moe_bf16(float* h, const uint16_t* w13, const uint16_t* w2,
         h[static_cast<size_t>(t) * H + o] = acc;
       }
     };
-    std::vector<std::thread> ths;
-    ths.reserve(nth - 1);
-    for (int i = 1; i < nth; ++i)
-      ths.emplace_back([&, i] { pin_to(i); body(); });
-    body();
-    for (auto& th : ths) th.join();
+    WorkerPool::get(nth).run(body);
   };
 
   pass2();
