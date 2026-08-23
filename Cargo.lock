@@ -481,6 +481,7 @@ dependencies = [
  "ft-memory",
  "ft-moe",
  "ft-server",
+ "reqwest",
  "serde_json",
  "tokio",
  "tracing",

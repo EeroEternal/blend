@@ -94,6 +94,20 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         threads: usize,
     },
+    /// 并发考核：扫 N 路同时请求，报聚合 tok/s 与时延分位
+    BenchConc {
+        #[arg(long, default_value = "http://127.0.0.1:8080")]
+        url: String,
+        #[arg(long, default_value = "Qwen3-30B-A3B-Instruct")]
+        model: String,
+        /// 并发列表，逗号分隔
+        #[arg(long, default_value = "1,2,4,8")]
+        concurrency: String,
+        #[arg(long, default_value_t = 128)]
+        max_tokens: usize,
+        #[arg(long, default_value = "Write a short paragraph about mixture of experts.")]
+        prompt: String,
+    },
     /// V2 control：反代到 FreeToken / torch worker（生产路径）
     Control {
         #[arg(long, default_value = "0.0.0.0")]
@@ -204,6 +218,14 @@ fn main() -> anyhow::Result<()> {
         Cmd::DecodeSmoke { steps, layers, full, threads } => {
             decode_smoke::run(steps, layers, full, threads);
         }
+        Cmd::BenchConc { url, model, concurrency, max_tokens, prompt } => {
+            let list = bench_conc::parse_list(&concurrency);
+            if list.is_empty() {
+                anyhow::bail!("--concurrency 为空");
+            }
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+            rt.block_on(bench_conc::run(url, model, list, max_tokens, prompt))?;
+        }
         Cmd::Control { host, port, workers } => {
             tracing::info!(?workers, "starting blend-control");
             let gw = ft_server::Gateway::new(workers)?;
@@ -256,6 +278,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+mod bench_conc;
 mod decode_qwen;
 mod decode_smoke;
 mod gpu_ffn_parity;
