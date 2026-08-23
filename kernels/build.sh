@@ -11,9 +11,28 @@ mkdir -p "$OUT"
 # CUDA 部分（失败不阻塞 CPU 库——无 GPU 的机器仍可构建/测试 CPU 路径）
 if command -v nvcc >/dev/null 2>&1; then
   ARCH=${FT_CUDA_ARCH:-sm_100}   # 默认 Blackwell (RTX PRO 6000)
-  nvcc -O3 --generate-code=arch=compute_100,code=[compute_100,$ARCH] \
-       -shared -Xcompiler -fPIC \
-       basic/kernels.cu -o "$OUT/libftkernels.so"
+  FI_INC=""
+  # 常见 flashinfer 头文件位置（venv 或系统）
+  for d in \
+      ${FLASHINFER_INCLUDE:-} \
+      "$HOME/freetoken-venv/lib/python3.10/site-packages/flashinfer/data/include" \
+      /usr/local/include; do
+    if [ -n "$d" ] && [ -f "$d/flashinfer/attention/decode.cuh" ]; then
+      FI_INC="-I$d -DFT_HAS_FLASHINFER=1"
+      break
+    fi
+  done
+  SRC="basic/kernels.cu"
+  if [ -n "$FI_INC" ]; then
+    SRC="$SRC basic/fi_single_decode.cu"
+    echo "flashinfer headers: $FI_INC"
+  else
+    echo "flashinfer headers not found; building without FI"
+  fi
+  nvcc -O3 --std=c++17 --expt-relaxed-constexpr --expt-extended-lambda \
+       --generate-code=arch=compute_100,code=[compute_100,$ARCH] \
+       -shared -Xcompiler -fPIC $FI_INC \
+       $SRC -o "$OUT/libftkernels.so"
   echo "built $OUT/libftkernels.so"
 else
   echo "skip libftkernels.so (nvcc not found)"

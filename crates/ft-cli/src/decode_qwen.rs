@@ -111,19 +111,18 @@ impl GpuAttn {
         unsafe {
             let k0 = (self.k_cache.as_ptr() as *const f32).add(kptr_off);
             let v0 = (self.v_cache.as_ptr() as *const f32).add(kptr_off);
-            let _ = ft_kernel_sys::cuda::ft_gpu_gqa_decode(
-                self.yq.as_ptr() as *const f32,
-                k0,
-                v0,
-                self.ctx.as_mut_ptr() as *mut f32,
-                HEADS as i32,
-                KV_HEADS as i32,
-                HEAD_DIM as i32,
-                (pos + 1) as i32,
-                self.max_seq as i32,
-                1.0 / (HEAD_DIM as f32).sqrt(),
-                self.stream.raw(),
-            );
+            if ft_kernel::fi_single_decode(
+                &self.yq, k0, v0, &mut self.ctx,
+                HEADS, KV_HEADS, HEAD_DIM, pos + 1, self.max_seq, &self.stream,
+            ).is_err() {
+                let _ = ft_kernel_sys::cuda::ft_gpu_gqa_decode(
+                    self.yq.as_ptr() as *const f32, k0, v0,
+                    self.ctx.as_mut_ptr() as *mut f32,
+                    HEADS as i32, KV_HEADS as i32, HEAD_DIM as i32,
+                    (pos + 1) as i32, self.max_seq as i32,
+                    1.0 / (HEAD_DIM as f32).sqrt(), self.stream.raw(),
+                );
+            }
         }
         gemv_bf16(self.w[layer * 4 + 3].as_ptr() as *const u16, &self.ctx, &mut self.yo, cols, hq, &self.stream)?;
         self.stream.sync()?;
@@ -312,7 +311,12 @@ fn attention(
 ) -> Vec<f32> {
     let hq = HEADS * HEAD_DIM;
     let hk = KV_HEADS * HEAD_DIM;
-    // decode_attn（全 GPU softmax）短序列启动开销更大，默认走 QKV 批处理 + CPU softmax。
+    #[cfg(feature = "cuda")]
+    if let Some(g) = gpu.as_mut() {
+        if let Ok(o) = g.decode_attn(layer_id, x, pos) {
+            return o;
+        }
+    }
     let (q, k, v) = {
         #[cfg(feature = "cuda")]
         {

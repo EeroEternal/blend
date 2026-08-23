@@ -219,6 +219,13 @@ int ft_gpu_copy_kv(float* cache, const float* src, int kv_heads, int dim, int po
     return 0;
 }
 
+#ifndef FT_HAS_FLASHINFER
+extern "C" int ft_fi_single_decode(const float*, const float*, const float*, float*,
+                                    int, int, int, int, int, void*) {
+    return -1;  // 未链接 flashinfer
+}
+#endif
+
 } // extra extern
 
 } // extern "C"
