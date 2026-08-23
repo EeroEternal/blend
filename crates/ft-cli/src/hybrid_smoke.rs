@@ -107,6 +107,9 @@ pub fn run(steps: usize, layers: usize, cache_slots: usize, threads: usize) {
     let wall = Instant::now();
     for step in 0..steps {
         drv.kernel.counting = step >= warmup;
+        if step == warmup {
+            drv.rt.reset_stats();
+        }
         drv.decode_token(|layer| {
             let l = layer as usize;
             if step > 0 {

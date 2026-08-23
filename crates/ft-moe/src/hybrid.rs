@@ -39,6 +39,9 @@ impl HybridRuntime {
     pub fn stats(&self) -> &HybridStats {
         &self.stats
     }
+    pub fn reset_stats(&mut self) {
+        self.stats = HybridStats::default();
+    }
     pub fn cache_len(&self) -> usize {
         self.cache.len()
     }
