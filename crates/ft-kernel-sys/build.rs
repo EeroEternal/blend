@@ -4,7 +4,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=FT_KERNELS_DIR");
     println!("cargo:rerun-if-env-changed=CUDA_HOME");
     if std::env::var("CARGO_FEATURE_CUDA").is_ok() {
-        let dir = std::env::var("FT_KERNELS_DIR").unwrap_or_else(|_| "../kernels/build".into());
+        let dir = std::env::var("FT_KERNELS_DIR")
+            .unwrap_or_else(|_| "../../kernels/build".into());
         let cuda_home =
             std::env::var("CUDA_HOME").unwrap_or_else(|_| "/usr/local/cuda".into());
         println!("cargo:rustc-link-search=native={dir}");
