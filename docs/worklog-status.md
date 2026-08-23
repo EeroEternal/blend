@@ -103,9 +103,11 @@ PYBIND11 部分(尾部)                                                      ←
   - shim 漏 `immintrin.h`
   - moe-bench 带宽按实际权重宽度计（simd=BF16 2B）
 
-### ①' 剩余优化（113.7 → 155 GB/s 的差距来源）
-- [ ] 持久线程池替代每调用 spawn（当前两阶段各 spawn 63 线程 ≈ 数 ms 开销）
-- [ ] bs>1 时专家去重（FreeToken 对同 token 批的重复专家只读一次）
+### ①' 持久线程池 ✅ 完成（2026-08-23）
+- [x] `WorkerPool`：进程级单例，condvar 唤醒 + 代际 ack；主线程为 0 号参与者
+- [x] 稳态实测（iters=10）：**19.5–19.6 ms/step = 123.3–123.6 GB/s**（spawn 版 113.7）
+- 注：共享机上偶发 83 GB/s 读数，为同机 vllm/sglang 负载干扰
+- [ ] bs>1 专家去重（T=8/E=256/K=6 下重复率仅 ~10%，优先级降低，大 batch 再做）
 
 ### ② core pinning ✅ 完成（结论反转：默认不 pin，opt-in）
 实测矩阵（8tok DSV4 形状，双路 EPYC / 2 NUMA 节点 / 逻辑 CPU 交错编号）：
