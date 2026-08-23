@@ -12,6 +12,10 @@
 #include <thread>
 #include <vector>
 
+#if defined(__x86_64__)
+#include <immintrin.h>
+#endif
+
 namespace {
 
 using bf16_t = uint16_t;
@@ -105,7 +109,6 @@ float dot_avx512bf16(const bf16_t* w, const bf16_t* x, int n) {
 
 dot_fn select_dot() {
 #if defined(__x86_64__)
-  __builtin_cpu_init();
   if (__builtin_cpu_supports("avx512bf16")) return dot_avx512bf16;
   if (__builtin_cpu_supports("avx512f")) return dot_avx512f;
 #endif
