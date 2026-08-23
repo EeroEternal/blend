@@ -27,12 +27,77 @@ const char* ft_cuda_last_error() {
 }
 
 int ft_vector_add(const float* a, const float* b, float* out, int n) {
-    // a/b/out 为 device 指针
     int block = 256;
     int grid = (n + block - 1) / block;
     vec_add_kernel<<<grid, block>>>(a, b, out, n);
     cudaError_t e = cudaGetLastError();
     return e == cudaSuccess ? 0 : (int)e;
+}
+
+} // extern "C"
+
+// ---- bf16 GEMV + SwiGLU（GPU 专家计算路径）----
+__device__ __forceinline__ float d_bf16_f32(uint16_t v) {
+    uint32_t u = static_cast<uint32_t>(v) << 16;
+    return __uint_as_float(u);
+}
+
+// out[row] = dot(w[row, 0:cols], x[0:cols])  w 为 bf16 行主
+__global__ void gemv_bf16_kernel(const uint16_t* w, const float* x, float* out,
+                                 int rows, int cols) {
+    int row = blockIdx.x;
+    if (row >= rows) return;
+    const uint16_t* wr = w + static_cast<size_t>(row) * cols;
+    float acc = 0.f;
+    for (int j = threadIdx.x; j < cols; j += blockDim.x) {
+        acc += d_bf16_f32(wr[j]) * x[j];
+    }
+    // block reduce
+    __shared__ float sm[256];
+    sm[threadIdx.x] = acc;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) sm[threadIdx.x] += sm[threadIdx.x + s];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) out[row] = sm[0];
+}
+
+// mid[i] = silu(gate[i]) * up[i]; gate=g[0:I], up=g[I:2I]
+__global__ void silu_mul_kernel(const float* g, float* mid, int I) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < I) {
+        float gate = g[i];
+        float up = g[I + i];
+        mid[i] = (gate / (1.f + expf(-gate))) * up;
+    }
+}
+
+// y[i] += scale * x[i]
+__global__ void axpy_kernel(float* y, const float* x, float scale, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) y[i] += scale * x[i];
+}
+
+extern "C" {
+
+// 单专家 SwiGLU FFN：slot = [w13 (2I×H bf16) | w2 (H×I bf16)]
+// x, y 为 device f32 [H]；y 累加 rw * down(silu(gate)*up)
+int ft_gpu_expert_ffn(const uint16_t* slot, const float* x, float* y,
+                      float* scratch_2i, float* scratch_i,
+                      int H, int I, float rw, cudaStream_t stream) {
+    const uint16_t* w13 = slot;
+    const uint16_t* w2 = slot + static_cast<size_t>(2 * I) * H;
+    gemv_bf16_kernel<<<I * 2, 256, 0, stream>>>(w13, x, scratch_2i, 2 * I, H);
+    silu_mul_kernel<<<(I + 255) / 256, 256, 0, stream>>>(scratch_2i, scratch_i, I);
+    // down: tmp_h[H] 需要第三块 scratch——复用 scratch_2i 的前 H（H <= 2I 对 DSV4/GLM 成立）
+    gemv_bf16_kernel<<<H, 256, 0, stream>>>(w2, scratch_i, scratch_2i, H, I);
+    axpy_kernel<<<(H + 255) / 256, 256, 0, stream>>>(y, scratch_2i, rw, H);
+    return cudaGetLastError() == cudaSuccess ? 0 : -1;
+}
+
+int ft_gpu_zero(float* p, int n, cudaStream_t stream) {
+    return cudaMemsetAsync(p, 0, static_cast<size_t>(n) * sizeof(float), stream) == cudaSuccess ? 0 : -1;
 }
 
 } // extern "C"

@@ -191,6 +191,39 @@ mod gpu {
         }
     }
 
+    impl Stream {
+        pub fn raw(&self) -> *mut c_void {
+            self.0
+        }
+    }
+
+    /// 在 GPU 上累加一个专家的 SwiGLU FFN。
+    pub fn expert_ffn(
+        slot: *const u16,
+        x: &DevBuffer,
+        y: &mut DevBuffer,
+        scratch_2i: &mut DevBuffer,
+        scratch_i: &mut DevBuffer,
+        hidden: usize,
+        inter: usize,
+        rw: f32,
+        stream: &Stream,
+    ) -> Result<()> {
+        let rc = unsafe {
+            sys::ft_gpu_expert_ffn(
+                slot, x.as_ptr() as *const f32, y.as_mut_ptr() as *mut f32,
+                scratch_2i.as_mut_ptr() as *mut f32, scratch_i.as_mut_ptr() as *mut f32,
+                hidden as i32, inter as i32, rw, stream.raw(),
+            )
+        };
+        if rc == 0 { Ok(()) } else { Err(FtError::Kernel(format!("ft_gpu_expert_ffn: {rc}"))) }
+    }
+
+    pub fn gpu_zero(p: &mut DevBuffer, n: usize, stream: &Stream) -> Result<()> {
+        let rc = unsafe { sys::ft_gpu_zero(p.as_mut_ptr() as *mut f32, n as i32, stream.raw()) };
+        if rc == 0 { Ok(()) } else { Err(FtError::Kernel("ft_gpu_zero".into())) }
+    }
+
     pub fn vector_add(a: &DevBuffer, b: &DevBuffer, out: &mut DevBuffer, n: usize) -> Result<()> {
         let rc = unsafe {
             sys::ft_vector_add(
@@ -208,7 +241,7 @@ mod gpu {
 }
 
 #[cfg(feature = "cuda")]
-pub use gpu::{device_count, device_info, set_device, vector_add, DevBuffer, GpuSlotBank, PinnedBuf, Stream};
+pub use gpu::{device_count, device_info, set_device, vector_add, expert_ffn, gpu_zero, DevBuffer, GpuSlotBank, PinnedBuf, Stream};
 
 /// CPU SIMD MoE 执行器（libftcpu.so 的 AVX512BF16 shim）。
 #[cfg(feature = "cpu-simd")]

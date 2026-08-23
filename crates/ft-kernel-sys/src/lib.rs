@@ -60,6 +60,18 @@
             out: *mut f32,
             n: c_int,
         ) -> c_int;
+        pub fn ft_gpu_expert_ffn(
+            slot: *const u16,
+            x: *const f32,
+            y: *mut f32,
+            scratch_2i: *mut f32,
+            scratch_i: *mut f32,
+            h: c_int,
+            i: c_int,
+            rw: f32,
+            stream: *mut std::ffi::c_void,
+        ) -> c_int;
+        pub fn ft_gpu_zero(p: *mut f32, n: c_int, stream: *mut std::ffi::c_void) -> c_int;
     }
 
     pub const cudaMemcpyHostToDevice: c_int = 1;

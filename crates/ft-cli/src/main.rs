@@ -11,6 +11,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// 单专家 GPU SwiGLU vs CPU naive 对拍（需 --features cuda）
+    GpuFfnParity {
+        #[arg(long, default_value_t = 256)]
+        hidden: usize,
+        #[arg(long, default_value_t = 128)]
+        inter: usize,
+    },
     /// 实测 PCIe H2D 带宽（需 --features cuda）
     PcieBench {
         #[arg(long, default_value_t = 256)]
@@ -123,6 +130,9 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
     match Cli::parse().cmd {
+        Cmd::GpuFfnParity { hidden, inter } => {
+            gpu_ffn_parity::run(hidden, inter)?;
+        }
         Cmd::PcieBench { mib, iters } => {
             pcie_bench::run(mib, iters)?;
         }
@@ -173,6 +183,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 mod decode_smoke;
+mod gpu_ffn_parity;
 mod gpu_smoke;
 mod hybrid_smoke;
 mod pcie_bench;
