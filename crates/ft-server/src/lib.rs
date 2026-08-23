@@ -2,5 +2,7 @@
 
 pub mod api;
 pub mod bridge;
+pub mod gateway;
 
 pub use bridge::{spawn_engine, EngineHandle};
+pub use gateway::Gateway;

@@ -17,3 +17,6 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 futures-core = "0.3"
 tokio-stream = "0.1"
+reqwest = { workspace = true }
+bytes = { workspace = true }
+anyhow = { workspace = true }

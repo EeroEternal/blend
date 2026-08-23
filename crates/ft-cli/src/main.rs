@@ -94,6 +94,16 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         threads: usize,
     },
+    /// V2 control：反代到 FreeToken / torch worker（生产路径）
+    Control {
+        #[arg(long, default_value = "0.0.0.0")]
+        host: String,
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        /// worker 基址，可重复。例: --worker http://127.0.0.1:1930
+        #[arg(long = "worker", required = true)]
+        workers: Vec<String>,
+    },
     /// 启动 OpenAI 兼容 API 服务（当前为 stub 引擎，P2 接 GPU 内核）
     Serve {
         #[arg(long, default_value = "0.0.0.0")]
@@ -193,6 +203,18 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::DecodeSmoke { steps, layers, full, threads } => {
             decode_smoke::run(steps, layers, full, threads);
+        }
+        Cmd::Control { host, port, workers } => {
+            tracing::info!(?workers, "starting blend-control");
+            let gw = ft_server::Gateway::new(workers)?;
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+            rt.block_on(async move {
+                let addr = format!("{host}:{port}");
+                let listener = tokio::net::TcpListener::bind(&addr).await?;
+                tracing::info!("blend-control ready on http://{addr}");
+                axum::serve(listener, gw.router()).await?;
+                anyhow::Ok(())
+            })?;
         }
         Cmd::Serve { host, port, model } => {
             let engine = ft_server::spawn_engine(model);
