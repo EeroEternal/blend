@@ -146,6 +146,15 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑧ 真实权重闭环 ✅ 完成（2026-08-23）
+- [x] `ft-loader::locate_tensor` 读 HF `model.safetensors.index.json`
+- [x] `blend real-expert --model Qwen3-30B-A3B --layer --expert`
+- [x] 真机（层 0 专家 0 / 层 5 专家 17，BF16 H2048 I768）：
+  | 对比 | rel |
+  |---|---|
+  | GPU vs naive | **1.0e-6 / 9.1e-7** PASS |
+  | CPU SIMD vs naive | 2–3e-3（BF16 口径） |
+
 ### ⑦' GPU GEMV 优化 ✅ 完成（2026-08-23）
 - [x] 激活进 smem（避免每行重读 x）+ 双 bf16 展开
 - [x] DSV4 维度：**0.05 ms/expert，1111.7 GB/s**（接近 PRO 6000 HBM 量级）
