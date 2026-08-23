@@ -224,6 +224,23 @@ mod gpu {
         if rc == 0 { Ok(()) } else { Err(FtError::Kernel("ft_gpu_zero".into())) }
     }
 
+    pub fn gemv_bf16(
+        w: *const u16,
+        x: &DevBuffer,
+        out: &mut DevBuffer,
+        rows: usize,
+        cols: usize,
+        stream: &Stream,
+    ) -> Result<()> {
+        let rc = unsafe {
+            sys::ft_gpu_gemv_bf16(
+                w, x.as_ptr() as *const f32, out.as_mut_ptr() as *mut f32,
+                rows as i32, cols as i32, stream.raw(),
+            )
+        };
+        if rc == 0 { Ok(()) } else { Err(FtError::Kernel(format!("gemv_bf16: {rc}"))) }
+    }
+
     pub fn vector_add(a: &DevBuffer, b: &DevBuffer, out: &mut DevBuffer, n: usize) -> Result<()> {
         let rc = unsafe {
             sys::ft_vector_add(
@@ -241,7 +258,7 @@ mod gpu {
 }
 
 #[cfg(feature = "cuda")]
-pub use gpu::{device_count, device_info, set_device, vector_add, expert_ffn, gpu_zero, DevBuffer, GpuSlotBank, PinnedBuf, Stream};
+pub use gpu::{device_count, device_info, set_device, vector_add, expert_ffn, gemv_bf16, gpu_zero, DevBuffer, GpuSlotBank, PinnedBuf, Stream};
 
 /// CPU SIMD MoE 执行器（libftcpu.so 的 AVX512BF16 shim）。
 #[cfg(feature = "cpu-simd")]

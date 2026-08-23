@@ -72,6 +72,14 @@
             stream: *mut std::ffi::c_void,
         ) -> c_int;
         pub fn ft_gpu_zero(p: *mut f32, n: c_int, stream: *mut std::ffi::c_void) -> c_int;
+        pub fn ft_gpu_gemv_bf16(
+            w: *const u16,
+            x: *const f32,
+            out: *mut f32,
+            rows: c_int,
+            cols: c_int,
+            stream: *mut std::ffi::c_void,
+        ) -> c_int;
     }
 
     pub const cudaMemcpyHostToDevice: c_int = 1;

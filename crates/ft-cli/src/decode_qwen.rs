@@ -5,6 +5,34 @@ use ft_loader::{locate_tensor, SafeTensorFile};
 use std::collections::HashMap;
 use std::path::Path;
 
+#[cfg(feature = "cuda")]
+struct GpuAttn {
+    stream: ft_kernel::Stream,
+    x: ft_kernel::DevBuffer,
+    y: ft_kernel::DevBuffer,
+    /// 每层 4 块：q k v o
+    w: Vec<ft_kernel::DevBuffer>,
+}
+
+#[cfg(feature = "cuda")]
+impl GpuAttn {
+    fn gemv(&mut self, layer: usize, which: usize, x: &[f32], rows: usize, cols: usize) -> anyhow::Result<Vec<f32>> {
+        self.x.h2d(x)?;
+        ft_kernel::gemv_bf16(
+            self.w[layer * 4 + which].as_ptr() as *const u16,
+            &self.x,
+            &mut self.y,
+            rows,
+            cols,
+            &self.stream,
+        )?;
+        self.stream.sync()?;
+        let mut out = vec![0f32; rows];
+        self.y.d2h(&mut out)?;
+        Ok(out)
+    }
+}
+
 const HEADS: usize = 32;
 const KV_HEADS: usize = 4;
 const HEAD_DIM: usize = 128;
@@ -41,6 +69,21 @@ pub fn run(model: &str, n_layers: usize, prompt_len: usize, steps: usize) -> any
     let mut layers = load_layers(root, n_layers, hidden, e, inter)?;
     let final_norm = load_f32_from_bf16(root, "model.norm.weight")?;
 
+    #[cfg(feature = "cuda")]
+    let mut gpu_attn = match init_gpu_attn(&layers, hidden) {
+        Ok(g) => {
+            eprintln!("  GPU attn GEMV: on");
+            Some(g)
+        }
+        Err(e) => {
+            eprintln!("  GPU attn off ({e})");
+            None
+        }
+    };
+    #[cfg(not(feature = "cuda"))]
+    let mut gpu_attn: Option<()> = None;
+    let _ = &mut gpu_attn;
+
     // 用 embed 的前 prompt_len 个词作为 prompt（确定性、无需 tokenizer）
     let embed = load_u16(root, "model.embed_tokens.weight")?;
     let vocab = embed.shape[0];
@@ -68,7 +111,7 @@ pub fn run(model: &str, n_layers: usize, prompt_len: usize, steps: usize) -> any
     for pos in 0..prompt_len {
         let mut h = x[pos].clone();
         for li in 0..n_layers {
-            layer_step(&mut h, pos, &layers[li], hidden, e, inter, k_moe, th, &mut ck[li], &mut cv[li])?;
+            layer_step(&mut h, pos, &layers[li], hidden, e, inter, k_moe, th, &mut ck[li], &mut cv[li], gpu_attn.as_mut(), li)?;
         }
         x[pos] = h;
     }
@@ -79,7 +122,7 @@ pub fn run(model: &str, n_layers: usize, prompt_len: usize, steps: usize) -> any
     for s in 0..steps {
         let pos = prompt_len + s;
         for li in 0..n_layers {
-            layer_step(&mut h, pos, &layers[li], hidden, e, inter, k_moe, th, &mut ck[li], &mut cv[li])?;
+            layer_step(&mut h, pos, &layers[li], hidden, e, inter, k_moe, th, &mut ck[li], &mut cv[li], gpu_attn.as_mut(), li)?;
         }
         // 最终 norm（不跑 lm_head，只保数值不炸）
         rmsnorm_inplace(&mut h, &final_norm);
@@ -106,10 +149,13 @@ fn layer_step(
     th: usize,
     ck: &mut [Vec<[f32; HEAD_DIM]>],
     cv: &mut [Vec<[f32; HEAD_DIM]>],
+    #[cfg(feature = "cuda")] gpu: Option<&mut GpuAttn>,
+    #[cfg(not(feature = "cuda"))] gpu: Option<&mut ()>,
+    layer_id: usize,
 ) -> anyhow::Result<()> {
     let mut n = h.to_vec();
     rmsnorm_inplace(&mut n, &layer.attn.in_norm);
-    let attn_out = attention(&n, pos, &layer.attn, ck, cv);
+    let attn_out = attention(&n, pos, &layer.attn, ck, cv, gpu, layer_id);
     for (a, b) in h.iter_mut().zip(attn_out.iter()) {
         *a += *b;
     }
@@ -125,12 +171,24 @@ fn attention(
     a: &Attn,
     ck: &mut [Vec<[f32; HEAD_DIM]>],
     cv: &mut [Vec<[f32; HEAD_DIM]>],
+    #[cfg(feature = "cuda")] mut gpu: Option<&mut GpuAttn>,
+    #[cfg(not(feature = "cuda"))] _gpu: Option<&mut ()>,
+    layer_id: usize,
 ) -> Vec<f32> {
     let hq = HEADS * HEAD_DIM;
     let hk = KV_HEADS * HEAD_DIM;
-    let q = gemv(&a.q, x, hq, x.len());
-    let k = gemv(&a.k, x, hk, x.len());
-    let v = gemv(&a.v, x, hk, x.len());
+    let gemv_w = |w: &[u16], x: &[f32], rows: usize, cols: usize, which: usize| -> Vec<f32> {
+        #[cfg(feature = "cuda")]
+        if let Some(g) = gpu.as_mut() {
+            if let Ok(v) = g.gemv(layer_id, which, x, rows, cols) {
+                return v;
+            }
+        }
+        gemv(w, x, rows, cols)
+    };
+    let q = gemv_w(&a.q, x, hq, x.len(), 0);
+    let k = gemv_w(&a.k, x, hk, x.len(), 1);
+    let v = gemv_w(&a.v, x, hk, x.len(), 2);
     let mut qh = vec![[0f32; HEAD_DIM]; HEADS];
     let mut kh = vec![[0f32; HEAD_DIM]; KV_HEADS];
     let mut vh = vec![[0f32; HEAD_DIM]; KV_HEADS];
@@ -180,7 +238,30 @@ fn attention(
             ctx[hd * HEAD_DIM + d] = o;
         }
     }
-    gemv(&a.o, &ctx, x.len(), hq)
+    gemv_w(&a.o, &ctx, x.len(), hq, 3)
+}
+
+#[cfg(feature = "cuda")]
+fn init_gpu_attn(layers: &[Layer], hidden: usize) -> anyhow::Result<GpuAttn> {
+    use ft_kernel::{device_count, set_device, DevBuffer, Stream};
+    let n = device_count()?;
+    if n == 0 {
+        anyhow::bail!("no device");
+    }
+    set_device((n as i32) - 1)?;
+    let stream = Stream::new()?;
+    let max_out = HEADS * HEAD_DIM; // 4096
+    let x = DevBuffer::alloc(hidden.max(max_out) * 4)?;
+    let y = DevBuffer::alloc(max_out.max(hidden) * 4)?;
+    let mut w = Vec::new();
+    for L in layers {
+        for src in [&L.attn.q, &L.attn.k, &L.attn.v, &L.attn.o] {
+            let mut b = DevBuffer::alloc(src.len() * 2)?;
+            b.h2d_bytes(src.as_ptr() as *const _, src.len() * 2)?;
+            w.push(b);
+        }
+    }
+    Ok(GpuAttn { stream, x, y, w })
 }
 
 fn moe_residual(

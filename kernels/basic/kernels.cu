@@ -110,4 +110,11 @@ int ft_gpu_zero(float* p, int n, cudaStream_t stream) {
     return cudaMemsetAsync(p, 0, static_cast<size_t>(n) * sizeof(float), stream) == cudaSuccess ? 0 : -1;
 }
 
+int ft_gpu_gemv_bf16(const uint16_t* w, const float* x, float* out,
+                     int rows, int cols, cudaStream_t stream) {
+    const size_t smem = static_cast<size_t>(cols) * sizeof(float);
+    gemv_bf16_kernel<<<rows, 256, smem, stream>>>(w, x, out, rows, cols);
+    return cudaGetLastError() == cudaSuccess ? 0 : -1;
+}
+
 } // extern "C"
