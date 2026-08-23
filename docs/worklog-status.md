@@ -105,8 +105,22 @@ PYBIND11 部分(尾部)                                                      ←
 
 ### ①' 剩余优化（113.7 → 155 GB/s 的差距来源）
 - [ ] 持久线程池替代每调用 spawn（当前两阶段各 spawn 63 线程 ≈ 数 ms 开销）
-- [ ] core pinning（任务②一并做）
 - [ ] bs>1 时专家去重（FreeToken 对同 token 批的重复专家只读一次）
+
+### ② core pinning ✅ 完成（结论反转：默认不 pin，opt-in）
+实测矩阵（8tok DSV4 形状，双路 EPYC / 2 NUMA 节点 / 逻辑 CPU 交错编号）：
+| 绑定策略 | 带宽 |
+|---|---|
+| **无 pinning（OS 调度）** | **110–113 GB/s** ✅ 最优 |
+| taskset node0 (CPU0-31) | 103 GB/s |
+| taskset node1 (CPU32-63) | 89 GB/s（远端内存） |
+| shim 盲 pin 0–63（跨节点） | 57.9 GB/s ❌ |
+
+结论：
+- NUMA 感知调度交给 OS；固定绑定必须按拓扑设计（同节点 + 首触分配），盲绑有害
+- 实现：`BLEND_PIN_CPU=<起始逻辑CPU>` 环境变量 opt-in，默认关闭
+- FreeToken 的 "pin to cores 0..62" 在单路机器上等价于物理核集合，在双路上未必最优
+- SMT 坑记录的"按物理核数配置线程数"结论仍然有效——那是线程数问题，与亲和性是两回事
 
 ### ② rayon 物理核 pinning 实装
 - [ ] `ft-cli`/engine 启动时按 `physical_cores()` 配置线程池
