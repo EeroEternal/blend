@@ -11,6 +11,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// 加载一整层 Qwen3-MoE（router + 全部专家），真实 top-k 前向
+    MoeLayer {
+        #[arg(long)]
+        model: String,
+        #[arg(long, default_value_t = 0)]
+        layer: usize,
+        #[arg(long, default_value_t = 1)]
+        tokens: usize,
+    },
     /// 从 HF 目录加载真实专家权重并 CPU/GPU 对拍
     RealExpert {
         #[arg(long)]
@@ -141,6 +150,9 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
     match Cli::parse().cmd {
+        Cmd::MoeLayer { model, layer, tokens } => {
+            moe_layer::run(&model, layer, tokens)?;
+        }
         Cmd::RealExpert { model, layer, expert } => {
             real_expert::run(&model, layer, expert)?;
         }
@@ -201,6 +213,7 @@ mod gpu_ffn_parity;
 mod gpu_smoke;
 mod hybrid_smoke;
 mod pcie_bench;
+mod moe_layer;
 mod real_expert;
 mod mem_bench;
 mod moe_bench;
