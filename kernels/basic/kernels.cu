@@ -219,10 +219,35 @@ int ft_gpu_copy_kv(float* cache, const float* src, int kv_heads, int dim, int po
     return 0;
 }
 
+__global__ void f32_to_bf16_kernel(const float* in, uint16_t* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        uint32_t u = __float_as_uint(in[i]);
+        out[i] = (uint16_t)((u + 0x7fffu + ((u >> 16) & 1u)) >> 16);
+    }
+}
+__global__ void bf16_to_f32_kernel(const uint16_t* in, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        uint32_t u = ((uint32_t)in[i]) << 16;
+        out[i] = __uint_as_float(u);
+    }
+}
+extern "C" {
+int ft_gpu_f32_to_bf16(const float* in, uint16_t* out, int n, cudaStream_t s) {
+    f32_to_bf16_kernel<<<(n + 255) / 256, 256, 0, s>>>(in, out, n);
+    return cudaGetLastError() == cudaSuccess ? 0 : -1;
+}
+int ft_gpu_bf16_to_f32(const uint16_t* in, float* out, int n, cudaStream_t s) {
+    bf16_to_f32_kernel<<<(n + 255) / 256, 256, 0, s>>>(in, out, n);
+    return cudaGetLastError() == cudaSuccess ? 0 : -1;
+}
+}
+
 #ifndef FT_HAS_FLASHINFER
-extern "C" int ft_fi_single_decode(const float*, const float*, const float*, float*,
+extern "C" int ft_fi_single_decode(const void*, const void*, const void*, void*,
                                     int, int, int, int, int, void*) {
-    return -1;  // 未链接 flashinfer
+    return -1;
 }
 #endif
 

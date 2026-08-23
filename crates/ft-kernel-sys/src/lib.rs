@@ -88,7 +88,7 @@
             scale: f32, stream: *mut std::ffi::c_void,
         ) -> c_int;
         pub fn ft_fi_single_decode(
-            q: *const f32, k: *const f32, v: *const f32, o: *mut f32,
+            q: *const u16, k: *const u16, v: *const u16, o: *mut u16,
             heads: c_int, kv_heads: c_int, dim: c_int, seq: c_int, max_seq: c_int,
             stream: *mut std::ffi::c_void,
         ) -> c_int;

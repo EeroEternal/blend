@@ -246,12 +246,12 @@ mod gpu {
         if rc == 0 { Ok(()) } else { Err(FtError::Kernel("gqa_decode".into())) }
     }
     pub fn fi_single_decode(
-        q: &DevBuffer, k: *const f32, v: *const f32, out: &mut DevBuffer,
+        q: *const u16, k: *const u16, v: *const u16, out: *mut u16,
         heads: usize, kv_heads: usize, dim: usize, seq: usize, max_seq: usize, stream: &Stream,
     ) -> Result<()> {
         let rc = unsafe {
             sys::ft_fi_single_decode(
-                q.as_ptr() as *const f32, k, v, out.as_mut_ptr() as *mut f32,
+                q, k, v, out,
                 heads as i32, kv_heads as i32, dim as i32, seq as i32, max_seq as i32, stream.raw(),
             )
         };
