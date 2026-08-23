@@ -146,6 +146,12 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑤ engine decode 步接入真实 MoE ✅ 完成（2026-08-23）
+- [x] `blend decode-smoke`：调度器 admit→prefill→decode 循环 + 每步 N 层真实 moe_bf16
+- [x] 小形状冒烟：8 tok × 4 层 = 772 tok/s（调度器本身无瓶颈）
+- [x] DSV4 全形状（43 层）：**6.3 tok/s / 159 ms/tok** —— 与 3.7ms×43 估算完全吻合
+- 这是 **全 CPU、无 GPU LRU** 的下界；hybrid + GPU 缓存（FreeToken 实测 31–32 tok/s）是下一步接入 GPU 路径后的目标
+
 ## 五、已知风险 / 注意事项
 
 1. **FreeToken csrc 许可**：Apache 2.0，抽取需保留版权声明与来源标注
