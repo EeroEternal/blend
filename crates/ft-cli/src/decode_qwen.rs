@@ -33,6 +33,21 @@ impl GpuAttn {
     }
 }
 
+#[cfg(feature = "cuda")]
+struct GpuMoe {
+    rt: ft_moe::HybridRuntime,
+    bank: ft_kernel::GpuSlotBank,
+    stream: ft_kernel::Stream,
+    x: ft_kernel::DevBuffer,
+    y: ft_kernel::DevBuffer,
+    s2: ft_kernel::DevBuffer,
+    si: ft_kernel::DevBuffer,
+    map: HashMap<(u32, u32), usize>,
+    next: usize,
+    hidden: usize,
+    inter: usize,
+}
+
 const HEADS: usize = 32;
 const KV_HEADS: usize = 4;
 const HEAD_DIM: usize = 128;
@@ -84,6 +99,21 @@ pub fn run(model: &str, n_layers: usize, prompt_len: usize, steps: usize) -> any
     let mut gpu_attn: Option<()> = None;
     let _ = &mut gpu_attn;
 
+    #[cfg(feature = "cuda")]
+    let mut gpu_moe = match init_gpu_moe(hidden, inter) {
+        Ok(g) => {
+            eprintln!("  GPU MoE hybrid: on ({} slots)", g.bank.slots);
+            Some(g)
+        }
+        Err(e) => {
+            eprintln!("  GPU MoE off ({e})");
+            None
+        }
+    };
+    #[cfg(not(feature = "cuda"))]
+    let mut gpu_moe: Option<()> = None;
+    let _ = &mut gpu_moe;
+
     // 用 embed 的前 prompt_len 个词作为 prompt（确定性、无需 tokenizer）
     let embed = load_u16(root, "model.embed_tokens.weight")?;
     let vocab = embed.shape[0];
@@ -111,7 +141,7 @@ pub fn run(model: &str, n_layers: usize, prompt_len: usize, steps: usize) -> any
     for pos in 0..prompt_len {
         let mut h = x[pos].clone();
         for li in 0..n_layers {
-            layer_step(&mut h, pos, &layers[li], hidden, e, inter, k_moe, th, &mut ck[li], &mut cv[li], gpu_attn.as_mut(), li)?;
+            layer_step(&mut h, pos, &layers[li], hidden, e, inter, k_moe, th, &mut ck[li], &mut cv[li], gpu_attn.as_mut(), gpu_moe.as_mut(), li)?;
         }
         x[pos] = h;
     }
@@ -122,7 +152,7 @@ pub fn run(model: &str, n_layers: usize, prompt_len: usize, steps: usize) -> any
     for s in 0..steps {
         let pos = prompt_len + s;
         for li in 0..n_layers {
-            layer_step(&mut h, pos, &layers[li], hidden, e, inter, k_moe, th, &mut ck[li], &mut cv[li], gpu_attn.as_mut(), li)?;
+            layer_step(&mut h, pos, &layers[li], hidden, e, inter, k_moe, th, &mut ck[li], &mut cv[li], gpu_attn.as_mut(), gpu_moe.as_mut(), li)?;
         }
         // 最终 norm（不跑 lm_head，只保数值不炸）
         rmsnorm_inplace(&mut h, &final_norm);
@@ -151,6 +181,8 @@ fn layer_step(
     cv: &mut [Vec<[f32; HEAD_DIM]>],
     #[cfg(feature = "cuda")] gpu: Option<&mut GpuAttn>,
     #[cfg(not(feature = "cuda"))] gpu: Option<&mut ()>,
+    #[cfg(feature = "cuda")] gpu_moe: Option<&mut GpuMoe>,
+    #[cfg(not(feature = "cuda"))] gpu_moe: Option<&mut ()>,
     layer_id: usize,
 ) -> anyhow::Result<()> {
     let mut n = h.to_vec();
@@ -161,7 +193,7 @@ fn layer_step(
     }
     let mut n2 = h.to_vec();
     rmsnorm_inplace(&mut n2, &layer.attn.post_norm);
-    moe_residual(h, &n2, layer, hidden, e, inter, k_moe, th)?;
+    moe_residual(h, &n2, layer, hidden, e, inter, k_moe, th, gpu_moe, layer_id)?;
     Ok(())
 }
 
@@ -273,8 +305,80 @@ fn moe_residual(
     inter: usize,
     k_moe: usize,
     th: usize,
+    #[cfg(feature = "cuda")] gpu_moe: Option<&mut GpuMoe>,
+    #[cfg(not(feature = "cuda"))] _gpu_moe: Option<&mut ()>,
+    layer_id: usize,
 ) -> anyhow::Result<()> {
     let (ids, rw) = route(&layer.gate, n, e, hidden, k_moe);
+    let mut y = vec![0f32; hidden];
+
+    #[cfg(feature = "cuda")]
+    if let Some(g) = gpu_moe {
+        use ft_moe::{HybridRuntime, MissAction};
+        let plan = g.rt.plan_layer(layer_id as u32, &ids);
+        ft_kernel::gpu_zero(&mut g.y, hidden, &g.stream)?;
+        g.x.h2d(n)?;
+        let gpu_es: Vec<(u32, f32)> = {
+            let mut v = Vec::new();
+            for (i, &eid) in ids.iter().enumerate() {
+                let on_gpu = plan.cache_hits.contains(&eid)
+                    || plan.misses.iter().any(|m| matches!(m, MissAction::Fetch { expert_id } if *expert_id == eid));
+                if on_gpu {
+                    v.push((eid, rw[i]));
+                }
+            }
+            v
+        };
+        for (eid, wgt) in gpu_es {
+            let key = (layer_id as u32, eid);
+            if !g.map.contains_key(&key) {
+                let slot = g.next % g.bank.slots;
+                g.next += 1;
+                let dst = g.bank.slot_ptr(slot);
+                let w13_off = eid as usize * 2 * inter * hidden;
+                let w2_off = eid as usize * hidden * inter;
+                let w13b = 2 * inter * hidden * 2;
+                g.stream.h2d_async(dst, unsafe { layer.w13.as_ptr().add(w13_off) } as *const _, w13b)?;
+                g.stream.h2d_async(
+                    unsafe { (dst as *mut u8).add(w13b) } as *mut _,
+                    unsafe { layer.w2.as_ptr().add(w2_off) } as *const _,
+                    hidden * inter * 2,
+                )?;
+                g.map.insert(key, slot);
+            }
+            let slot = g.map[&key];
+            ft_kernel::expert_ffn(
+                g.bank.slot_ptr(slot) as *const u16,
+                &g.x, &mut g.y, &mut g.s2, &mut g.si,
+                hidden, inter, wgt, &g.stream,
+            )?;
+        }
+        g.stream.sync()?;
+        g.y.d2h(&mut y)?;
+        // ids 与 rw 对齐：GPU 专家置 -1，保留原槽位的路由权重
+        let cpu_ids: Vec<i32> = ids
+            .iter()
+            .map(|&eid| {
+                let cpu = plan.misses.iter().any(|m| matches!(m, MissAction::CpuCompute { expert_id } if *expert_id == eid));
+                if cpu { eid as i32 } else { -1 }
+            })
+            .collect();
+        if cpu_ids.iter().any(|&id| id >= 0) {
+            #[cfg(feature = "cpu-simd")]
+            {
+                let mut yc = n.to_vec();
+                ft_kernel::moe_bf16(&mut yc, &layer.w13, &layer.w2, &cpu_ids, &rw, 1, hidden, inter, e, k_moe, th)?;
+                for (a, b) in y.iter_mut().zip(yc.iter()) {
+                    *a += *b;
+                }
+            }
+        }
+        for (a, b) in h.iter_mut().zip(y.iter()) {
+            *a += *b;
+        }
+        return Ok(());
+    }
+
     let ids_i: Vec<i32> = ids.iter().map(|&v| v as i32).collect();
     let mut y = n.to_vec();
     #[cfg(feature = "cpu-simd")]
@@ -290,6 +394,27 @@ fn moe_residual(
         *a += *b;
     }
     Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn init_gpu_moe(hidden: usize, inter: usize) -> anyhow::Result<GpuMoe> {
+    use ft_kernel::{DevBuffer, GpuSlotBank, Stream};
+    use ft_moe::{BandwidthProfile, QStarPolicy};
+    let slot_bytes = (2 * inter * hidden + hidden * inter) * 2;
+    let slots = 768;
+    Ok(GpuMoe {
+        rt: ft_moe::HybridRuntime::new(slots, QStarPolicy::calibrate(&BandwidthProfile::pro6000_epyc9355())),
+        bank: GpuSlotBank::new(slots, slot_bytes)?,
+        stream: Stream::new()?,
+        x: DevBuffer::alloc(hidden * 4)?,
+        y: DevBuffer::alloc(hidden * 4)?,
+        s2: DevBuffer::alloc(2 * inter * 4)?,
+        si: DevBuffer::alloc(inter * 4)?,
+        map: HashMap::new(),
+        next: 0,
+        hidden,
+        inter,
+    })
 }
 
 fn route(gate: &[u16], x: &[f32], e: usize, hidden: usize, k: usize) -> (Vec<u32>, Vec<f32>) {
