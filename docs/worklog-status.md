@@ -146,6 +146,16 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑱ FI 默认路径：合并 RMSNorm + bf16 KV ✅（2026-08-23）
+- [x] `rmsnorm_heads` 一次 launch；KV 按 pos 写入 bf16 cache，不再整段转换
+- [x] decode-qwen **默认走 FlashInfer**
+- [x] 真机：
+  | | 之前 QKV+CPU | **FI 默认** |
+  |---|---|---|
+  | 8 层 | 88 tok/s | **92.7 tok/s** |
+  | 48 层 | 9.3 tok/s | **7.9 tok/s** |
+- 8 层略升；48 层未超过旧路径。整模仍远低于 FreeToken 130 tok/s（差在 CUDA Graph + 他们的 fused MoE，不只是注意力）。
+
 ### ⑰ FlashInfer 接入 ✅ 编译通过，默认未启用（2026-08-23）
 - [x] `kernels/basic/fi_single_decode.cu` 实例化 FI `SingleDecodeWithKVCacheDispatched<128, bf16>`
 - [x] 编进 `libftkernels.so`（需 flashinfer headers + libcudacxx）
