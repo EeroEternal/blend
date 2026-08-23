@@ -146,6 +146,18 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑫ QKV/O 上 GPU ✅ 完成（2026-08-23）
+- [x] `ft_gpu_gemv_bf16` 通用接口；decode-qwen 注意力投影常驻 VRAM
+- [x] 真机对比（同一 Qwen3-30B，prompt=8, gen=4）：
+
+  | | CPU 注意力 | **GPU GEMV** |
+  |---|---|---|
+  | 8 层 | 8.7 tok/s | **45.4 tok/s**（5.2×） |
+  | 48 层 | 1.4 tok/s | **6.6 tok/s**（4.7×） |
+  | 48L prefill 8 | 5.6 s | **1.14 s** |
+
+- |h| 仍稳定。下一步：MoE 接 hybrid（热专家 GPU），冲击 10+ tok/s。
+
 ### ⑪ Qwen3 真实 Transformer decode ✅ 完成（2026-08-23）
 - [x] RMSNorm + GQA（32/4 × d=128）+ Q/K RMSNorm + RoPE + KV cache
 - [x] 专家 MoE 仍走 AVX512BF16；注意力/QKV 为 CPU f32 GEMV
