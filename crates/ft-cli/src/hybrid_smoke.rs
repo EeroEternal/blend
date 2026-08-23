@@ -68,7 +68,8 @@ pub fn run(steps: usize, layers: usize, cache_slots: usize, threads: usize) {
                     routed[i] = ((rnd() as usize).wrapping_add(layer * 17 + i * 31) % experts) as u32;
                 }
             } else {
-                routed[0] = ((rnd() as usize).wrapping_add(layer * 13 + step * 7) % experts) as u32;
+                // 替换末位：Fetch 按 miss 列表头取，热集（前 5 个）优先被填入 GPU 缓存
+                routed[k - 1] = ((rnd() as usize).wrapping_add(layer * 13 + step * 7) % experts) as u32;
             }
             prev[layer] = routed.clone();
 
