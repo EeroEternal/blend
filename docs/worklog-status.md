@@ -146,6 +146,13 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑥ 真 PCIe H2D ✅ 完成（2026-08-23）
+- [x] CUDA runtime：MemcpyAsync / Stream / MallocHost / SetDevice
+- [x] `PinnedBuf` + `GpuSlotBank` + `Stream` RAII
+- [x] `blend pcie-bench`（pinned 256MiB）：**57.7 GB/s，与 FreeToken benchbw 画像完全一致**
+- [x] `hybrid-smoke --real-pcie`：Fetch 走真 DMA；单专家 pageable H2D 32.2 GB/s / 1.56 ms
+- [x] 空闲卡验证：`CUDA_VISIBLE_DEVICES=4`
+
 ### ⑤'' HybridRuntime / DecodeDriver 收编 ✅ 完成（2026-08-23）
 - [x] `ft-moe::HybridRuntime`：plan_layer + cpu_ids + reset_stats，sticky-routing 单测
 - [x] `ft-engine::DecodeDriver<K: MoeKernel>`：按层 plan→compute，内核可注入
