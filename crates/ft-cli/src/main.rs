@@ -11,6 +11,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// 实测 PCIe H2D 带宽（需 --features cuda）
+    PcieBench {
+        #[arg(long, default_value_t = 256)]
+        mib: usize,
+        #[arg(long, default_value_t = 5)]
+        iters: usize,
+    },
     /// Hybrid 路径冒烟：LRU 缓存 + q* 拆分 + 真实 SIMD 内核
     HybridSmoke {
         #[arg(long, default_value_t = 8)]
@@ -22,6 +29,9 @@ enum Cmd {
         cache_slots: usize,
         #[arg(long, default_value_t = 0)]
         threads: usize,
+        /// 真 PCIe H2D（需 --features cuda）；Fetch 走 cudaMemcpyAsync
+        #[arg(long, default_value_t = false)]
+        real_pcie: bool,
     },
     /// 调度器 + SIMD MoE 端到端冒烟（走 admit/prefill/decode 循环）
     DecodeSmoke {
@@ -113,8 +123,11 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
     match Cli::parse().cmd {
-        Cmd::HybridSmoke { steps, layers, cache_slots, threads } => {
-            hybrid_smoke::run(steps, layers, cache_slots, threads);
+        Cmd::PcieBench { mib, iters } => {
+            pcie_bench::run(mib, iters)?;
+        }
+        Cmd::HybridSmoke { steps, layers, cache_slots, threads, real_pcie } => {
+            hybrid_smoke::run(steps, layers, cache_slots, threads, real_pcie);
         }
         Cmd::DecodeSmoke { steps, layers, full, threads } => {
             decode_smoke::run(steps, layers, full, threads);
@@ -162,6 +175,7 @@ fn main() -> anyhow::Result<()> {
 mod decode_smoke;
 mod gpu_smoke;
 mod hybrid_smoke;
+mod pcie_bench;
 mod mem_bench;
 mod moe_bench;
 mod parity;

@@ -90,14 +90,17 @@ mod gpu {
             self.ptr.0
         }
         pub fn h2d(&self, src: &[f32]) -> Result<()> {
-            let bytes = src.len() * 4;
+            self.h2d_bytes(src.as_ptr() as *const c_void, src.len() * 4)
+        }
+        pub fn h2d_bytes(&self, src: *const c_void, bytes: usize) -> Result<()> {
             assert!(bytes <= self.len_bytes);
             check(
-                unsafe {
-                    sys::cudaMemcpy(self.ptr.0, src.as_ptr() as *const c_void, bytes, sys::cudaMemcpyHostToDevice)
-                },
+                unsafe { sys::cudaMemcpy(self.ptr.0, src, bytes, sys::cudaMemcpyHostToDevice) },
                 "cudaMemcpy H2D",
             )
+        }
+        pub fn offset(&self, bytes: usize) -> *mut c_void {
+            unsafe { (self.ptr.0 as *mut u8).add(bytes) as *mut c_void }
         }
         pub fn d2h(&self, dst: &mut [f32]) -> Result<()> {
             let bytes = dst.len() * 4;
@@ -114,6 +117,77 @@ mod gpu {
     impl Drop for DevBuffer {
         fn drop(&mut self) {
             unsafe { sys::cudaFree(self.ptr.0) };
+        }
+    }
+
+    pub struct Stream(*mut c_void);
+    impl Stream {
+        pub fn new() -> Result<Self> {
+            let mut s = std::ptr::null_mut();
+            check(unsafe { sys::cudaStreamCreate(&mut s) }, "cudaStreamCreate")?;
+            Ok(Self(s))
+        }
+        pub fn sync(&self) -> Result<()> {
+            check(unsafe { sys::cudaStreamSynchronize(self.0) }, "cudaStreamSynchronize")
+        }
+        pub fn h2d_async(&self, dst: *mut c_void, src: *const c_void, bytes: usize) -> Result<()> {
+            check(
+                unsafe { sys::cudaMemcpyAsync(dst, src, bytes, sys::cudaMemcpyHostToDevice, self.0) },
+                "cudaMemcpyAsync H2D",
+            )
+        }
+    }
+    impl Drop for Stream {
+        fn drop(&mut self) {
+            unsafe { sys::cudaStreamDestroy(self.0) };
+        }
+    }
+
+    pub fn set_device(index: i32) -> Result<()> {
+        check(unsafe { sys::cudaSetDevice(index) }, "cudaSetDevice")
+    }
+
+    /// 页锁定主机内存（cudaMallocHost），异步 H2D 的正确源。
+    pub struct PinnedBuf {
+        ptr: *mut c_void,
+        pub len: usize,
+    }
+    unsafe impl Send for PinnedBuf {}
+    impl PinnedBuf {
+        pub fn alloc(bytes: usize) -> Result<Self> {
+            let mut p = std::ptr::null_mut();
+            check(unsafe { sys::cudaMallocHost(&mut p, bytes) }, "cudaMallocHost")?;
+            Ok(Self { ptr: p, len: bytes })
+        }
+        pub fn as_mut_ptr(&self) -> *mut u8 {
+            self.ptr as *mut u8
+        }
+        pub fn as_ptr(&self) -> *const c_void {
+            self.ptr
+        }
+        pub fn as_slice_mut(&mut self) -> &mut [u8] {
+            unsafe { std::slice::from_raw_parts_mut(self.ptr as *mut u8, self.len) }
+        }
+    }
+    impl Drop for PinnedBuf {
+        fn drop(&mut self) {
+            unsafe { sys::cudaFreeHost(self.ptr) };
+        }
+    }
+
+    /// GPU 专家槽位池：一整块 device 内存切成 slots。
+    pub struct GpuSlotBank {
+        buf: DevBuffer,
+        pub slots: usize,
+        pub slot_bytes: usize,
+    }
+    impl GpuSlotBank {
+        pub fn new(slots: usize, slot_bytes: usize) -> Result<Self> {
+            Ok(Self { buf: DevBuffer::alloc(slots * slot_bytes)?, slots, slot_bytes })
+        }
+        pub fn slot_ptr(&self, slot: usize) -> *mut c_void {
+            assert!(slot < self.slots);
+            self.buf.offset(slot * self.slot_bytes)
         }
     }
 
@@ -134,7 +208,7 @@ mod gpu {
 }
 
 #[cfg(feature = "cuda")]
-pub use gpu::{device_count, device_info, vector_add, DevBuffer};
+pub use gpu::{device_count, device_info, set_device, vector_add, DevBuffer, GpuSlotBank, PinnedBuf, Stream};
 
 /// CPU SIMD MoE 执行器（libftcpu.so 的 AVX512BF16 shim）。
 #[cfg(feature = "cpu-simd")]

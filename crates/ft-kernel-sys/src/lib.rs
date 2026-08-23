@@ -30,12 +30,25 @@
         pub fn cudaGetDeviceProperties(prop: *mut CudaDeviceProp, device: c_int) -> FtStatus;
         pub fn cudaMalloc(dev_ptr: *mut *mut std::ffi::c_void, size: usize) -> FtStatus;
         pub fn cudaFree(dev_ptr: *mut std::ffi::c_void) -> FtStatus;
+        pub fn cudaMallocHost(ptr: *mut *mut std::ffi::c_void, size: usize) -> FtStatus;
+        pub fn cudaFreeHost(ptr: *mut std::ffi::c_void) -> FtStatus;
         pub fn cudaMemcpy(
             dst: *mut std::ffi::c_void,
             src: *const std::ffi::c_void,
             count: usize,
             kind: c_int,
         ) -> FtStatus;
+        pub fn cudaMemcpyAsync(
+            dst: *mut std::ffi::c_void,
+            src: *const std::ffi::c_void,
+            count: usize,
+            kind: c_int,
+            stream: *mut std::ffi::c_void,
+        ) -> FtStatus;
+        pub fn cudaStreamCreate(p: *mut *mut std::ffi::c_void) -> FtStatus;
+        pub fn cudaStreamDestroy(stream: *mut std::ffi::c_void) -> FtStatus;
+        pub fn cudaStreamSynchronize(stream: *mut std::ffi::c_void) -> FtStatus;
+        pub fn cudaSetDevice(device: c_int) -> FtStatus;
         pub fn cudaDeviceSynchronize() -> FtStatus;
 
         // libftkernels.so
