@@ -234,3 +234,19 @@ blend control --host 127.0.0.1 --port 8080 --worker http://127.0.0.1:1930
 - 流式透传 `/v1/*`，不缓冲 completion
 - `x-blend-session` / `x-session-id` 粘滞 worker
 - 真机：经 control 打 Qwen3-30B，FT 日志 **138–143 tok/s**（验收 ≥100 通过）
+
+
+---
+
+## 11. V2.1 落地（2026-08-23）
+
+两个 Qwen3-30B 副本（GPU4 `:1930` + GPU5 `:1932`），control `--worker` ×2。
+
+| 项 | 结果 |
+|---|---|
+| 会话粘滞 | `x-blend-session: stickyZ` 两次都进 1930 |
+| 两会话并发 | hits 1+1 分到两个 worker |
+| 单副本 | ~130–140 tok/s |
+| 双副本并发 | **140 + 127 ≈ 267 tok/s**（约 2.0×） |
+
+`/v1/workers` 暴露 inflight/hits；inflight 与流式 body 同寿命。
