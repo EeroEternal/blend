@@ -3,7 +3,7 @@
 //!   manifest.json : {"tokens":T,"hidden":H,"inter":I,"num_experts":E,"k":K}
 //!   h_in.f32      : [T*H]   topk.f32 : [T*K](f32 存专家 id)   weights.f32 : [T*K]
 //!   w13.f32       : [E*2*I*H]   w2.f32 : [E*H*I]            h_golden.f32 : [T*H]
-use anyhow::{bail, Ok};
+use anyhow::{bail, Context, Ok};
 use ft_moe::{CpuMoeExecutor, NaiveF32Executor};
 use std::path::Path;
 
