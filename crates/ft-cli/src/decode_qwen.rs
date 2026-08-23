@@ -401,7 +401,8 @@ fn init_gpu_moe(hidden: usize, inter: usize) -> anyhow::Result<GpuMoe> {
     use ft_kernel::{DevBuffer, GpuSlotBank, Stream};
     use ft_moe::{BandwidthProfile, QStarPolicy};
     let slot_bytes = (2 * inter * hidden + hidden * inter) * 2;
-    let slots = 768;
+    // 48 层 × ~8 热专家 ≈ 384；再留一点余量。过大易在已占用卡上 OOM。
+    let slots = 384;
     Ok(GpuMoe {
         rt: ft_moe::HybridRuntime::new(slots, QStarPolicy::calibrate(&BandwidthProfile::pro6000_epyc9355())),
         bank: GpuSlotBank::new(slots, slot_bytes)?,
