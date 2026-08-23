@@ -1,6 +1,6 @@
 //! GPU 链路冒烟：设备查询 → H2D → ft_vector_add → D2H → 校验。
 //! 验证 Rust → FFI → libftkernels.so → CUDA 全链路（P2 第一个真机里程碑）。
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 pub fn run(n: usize) -> Result<()> {
     #[cfg(not(feature = "cuda"))]
