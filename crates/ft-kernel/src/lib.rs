@@ -245,6 +245,18 @@ mod gpu {
         };
         if rc == 0 { Ok(()) } else { Err(FtError::Kernel("gqa_decode".into())) }
     }
+    pub fn f32_to_bf16_ptr(i: *const f32, o: *mut u16, n: usize, stream: &Stream) -> Result<()> {
+        let rc = unsafe { sys::ft_gpu_f32_to_bf16(i, o, n as i32, stream.raw()) };
+        if rc == 0 { Ok(()) } else { Err(FtError::Kernel("f32_to_bf16".into())) }
+    }
+    pub fn f32_to_bf16(i: &DevBuffer, o: &mut DevBuffer, n: usize, stream: &Stream) -> Result<()> {
+        f32_to_bf16_ptr(i.as_ptr() as *const f32, o.as_mut_ptr() as *mut u16, n, stream)
+    }
+    pub fn bf16_to_f32(i: &DevBuffer, o: &mut DevBuffer, n: usize, stream: &Stream) -> Result<()> {
+        let rc = unsafe { sys::ft_gpu_bf16_to_f32(i.as_ptr() as *const u16, o.as_mut_ptr() as *mut f32, n as i32, stream.raw()) };
+        if rc == 0 { Ok(()) } else { Err(FtError::Kernel("bf16_to_f32".into())) }
+    }
+
     pub fn fi_single_decode(
         q: *const u16, k: *const u16, v: *const u16, out: *mut u16,
         heads: usize, kv_heads: usize, dim: usize, seq: usize, max_seq: usize, stream: &Stream,
@@ -300,7 +312,7 @@ mod gpu {
 }
 
 #[cfg(feature = "cuda")]
-pub use gpu::{device_count, device_info, set_device, vector_add, expert_ffn, gemv_bf16, gpu_zero, rmsnorm, rope, gqa_decode, fi_single_decode, copy_kv, DevBuffer, GpuSlotBank, PinnedBuf, Stream};
+pub use gpu::{device_count, device_info, set_device, vector_add, expert_ffn, gemv_bf16, gpu_zero, rmsnorm, rope, gqa_decode, fi_single_decode, f32_to_bf16, f32_to_bf16_ptr, bf16_to_f32, copy_kv, DevBuffer, GpuSlotBank, PinnedBuf, Stream};
 
 /// CPU SIMD MoE 执行器（libftcpu.so 的 AVX512BF16 shim）。
 #[cfg(feature = "cpu-simd")]

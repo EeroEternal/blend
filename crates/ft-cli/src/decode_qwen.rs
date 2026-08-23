@@ -20,6 +20,10 @@ struct GpuAttn {
     kn: Vec<ft_kernel::DevBuffer>,
     k_cache: ft_kernel::DevBuffer,
     v_cache: ft_kernel::DevBuffer,
+    q_b: ft_kernel::DevBuffer,
+    k_b: ft_kernel::DevBuffer,
+    v_b: ft_kernel::DevBuffer,
+    o_b: ft_kernel::DevBuffer,
     max_seq: usize,
     n_layers: usize,
 }
@@ -108,20 +112,37 @@ impl GpuAttn {
         let kptr_off = layer_off;
         // gqa 需要该层 cache 指针 — 用整块 + kernel 内 kv*max_seq。传入 offset 后的 view：
         // 把 k_cache/v_cache 的 layer 起点当作 [kv,max_seq,dim]
-        unsafe {
-            let k0 = (self.k_cache.as_ptr() as *const f32).add(kptr_off);
-            let v0 = (self.v_cache.as_ptr() as *const f32).add(kptr_off);
-            if ft_kernel::fi_single_decode(
-                &self.yq, k0, v0, &mut self.ctx,
+        {
+            use ft_kernel::{f32_to_bf16, f32_to_bf16_ptr, bf16_to_f32, fi_single_decode};
+            let qn = HEADS * HEAD_DIM;
+            let kn = KV_HEADS * self.max_seq * HEAD_DIM;
+            let _ = f32_to_bf16(&self.yq, &mut self.q_b, qn, &self.stream);
+            unsafe {
+                let k0 = (self.k_cache.as_ptr() as *const f32).add(kptr_off);
+                let v0 = (self.v_cache.as_ptr() as *const f32).add(kptr_off);
+                let _ = f32_to_bf16_ptr(k0, self.k_b.as_mut_ptr() as *mut u16, kn, &self.stream);
+                let _ = f32_to_bf16_ptr(v0, self.v_b.as_mut_ptr() as *mut u16, kn, &self.stream);
+            }
+            if fi_single_decode(
+                self.q_b.as_ptr() as *const u16,
+                self.k_b.as_ptr() as *const u16,
+                self.v_b.as_ptr() as *const u16,
+                self.o_b.as_mut_ptr() as *mut u16,
                 HEADS, KV_HEADS, HEAD_DIM, pos + 1, self.max_seq, &self.stream,
-            ).is_err() {
-                let _ = ft_kernel_sys::cuda::ft_gpu_gqa_decode(
-                    self.yq.as_ptr() as *const f32, k0, v0,
-                    self.ctx.as_mut_ptr() as *mut f32,
-                    HEADS as i32, KV_HEADS as i32, HEAD_DIM as i32,
-                    (pos + 1) as i32, self.max_seq as i32,
-                    1.0 / (HEAD_DIM as f32).sqrt(), self.stream.raw(),
-                );
+            ).is_ok() {
+                let _ = bf16_to_f32(&self.o_b, &mut self.ctx, qn, &self.stream);
+            } else {
+                unsafe {
+                    let k0 = (self.k_cache.as_ptr() as *const f32).add(kptr_off);
+                    let v0 = (self.v_cache.as_ptr() as *const f32).add(kptr_off);
+                    let _ = ft_kernel_sys::cuda::ft_gpu_gqa_decode(
+                        self.yq.as_ptr() as *const f32, k0, v0,
+                        self.ctx.as_mut_ptr() as *mut f32,
+                        HEADS as i32, KV_HEADS as i32, HEAD_DIM as i32,
+                        (pos + 1) as i32, self.max_seq as i32,
+                        1.0 / (HEAD_DIM as f32).sqrt(), self.stream.raw(),
+                    );
+                }
             }
         }
         gemv_bf16(self.w[layer * 4 + 3].as_ptr() as *const u16, &self.ctx, &mut self.yo, cols, hq, &self.stream)?;
@@ -430,7 +451,12 @@ fn init_gpu_attn(layers: &[Layer], hidden: usize, max_seq: usize) -> anyhow::Res
         knb.h2d(&L.attn.kn)?;
         kn.push(knb);
     }
-    Ok(GpuAttn { stream, x, yq, yk, yv, yo, ctx, w, qn, kn, k_cache, v_cache, max_seq, n_layers })
+    let q_b = DevBuffer::alloc(HEADS * HEAD_DIM * 2)?;
+    let kv_b = KV_HEADS * max_seq * HEAD_DIM * 2;
+    let k_b = DevBuffer::alloc(kv_b)?;
+    let v_b = DevBuffer::alloc(kv_b)?;
+    let o_b = DevBuffer::alloc(HEADS * HEAD_DIM * 2)?;
+    Ok(GpuAttn { stream, x, yq, yk, yv, yo, ctx, w, qn, kn, k_cache, v_cache, q_b, k_b, v_b, o_b, max_seq, n_layers })
 }
 
 fn moe_residual(
