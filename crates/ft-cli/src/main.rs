@@ -11,6 +11,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Qwen3-MoE 真实 decode：RMSNorm + GQA + 专家 MoE
+    DecodeQwen {
+        #[arg(long)]
+        model: String,
+        #[arg(long, default_value_t = 48)]
+        layers: usize,
+        #[arg(long, default_value_t = 8)]
+        prompt_len: usize,
+        #[arg(long, default_value_t = 4)]
+        steps: usize,
+    },
     /// 加载全部层专家栈 decode（attention stub=残差）
     MoeModel {
         #[arg(long)]
@@ -159,6 +170,9 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
     match Cli::parse().cmd {
+        Cmd::DecodeQwen { model, layers, prompt_len, steps } => {
+            decode_qwen::run(&model, layers, prompt_len, steps)?;
+        }
         Cmd::MoeModel { model, layers, steps } => {
             moe_model::run(&model, layers, steps)?;
         }
@@ -220,6 +234,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+mod decode_qwen;
 mod decode_smoke;
 mod gpu_ffn_parity;
 mod gpu_smoke;
