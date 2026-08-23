@@ -218,6 +218,8 @@ V2.0 若做不到 100 tok/s，说明反代或协议把 Graph 热路径打断了�
 
 ## 9. 一句话
 
+> **2026-08-23：** 自研 decode / `kernels/` / `decode-qwen` 等已从仓库删除。生产与开发都只走 control → `ft serve`。
+
 v1 把 Rust 用在 forward 上，输掉了 PyTorch 白送的设备图。  
 v2 把 Rust 用在 **框架** 上：Agent、多模型、2/4 卡放置、CPU 专家与 GPU 的分工（q\*）。  
 算力层承认现实——**整网 GPU forward 用 PyTorch/FreeToken**。

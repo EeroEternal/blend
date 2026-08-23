@@ -1,15 +1,5 @@
-//! MoE 执行子系统：带宽自适应 q\* 策略（纯函数）、执行计划、CPU 执行器。
+//! q* 放置策略（纯函数）。不再包含自研 MoE 执行器。
 
-pub mod cache;
-pub mod cpu;
-pub mod hybrid;
-pub mod plan;
 pub mod policy;
-pub mod topology;
 
-pub use cache::{ExpertKey, LruExpertCache};
-pub use cpu::{CpuMoeExecutor, NaiveF32Executor};
-pub use hybrid::{HybridRuntime, HybridStats};
-pub use plan::{MoePlan, MissAction};
 pub use policy::{BackendKind, BandwidthProfile, QStarPolicy};
-pub use topology::physical_cores;

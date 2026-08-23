@@ -1,8 +1,0 @@
-[package]
-name = "ft-memory"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-ft-core = { workspace = true }
-tracing = { workspace = true }
