@@ -11,6 +11,7 @@
 #include <atomic>
 #include <thread>
 #include <vector>
+#include <cstdlib>
 
 #if defined(__linux__)
 #include <pthread.h>
@@ -136,17 +137,39 @@ extern "C" {
 /// 返回检测到的 ISA 名。
 const char* ft_cpu_isa_name() { return isa_name_of(select_dot()); }
 
-// 工作线程亲和性：pin 到第 cpu 个逻辑 CPU。
-// 坑记录 docs/pitfall-smt-bandwidth.md：SMT 满载使带宽倒亏 ~27%；
-// Linux 默认枚举下前 N 个逻辑 CPU 通常即物理核，与 FreeToken 的做法一致。
-static void pin_to(int cpu) {
+// 工作线程亲和性：默认关闭（见 docs/worklog-status.md 风险与实测结论：
+// 双路 EPYC 上 OS 自由调度 110-113 GB/s 优于任何固定绑定，跨 NUMA 绑定最差 57.9）。
+// opt-in：环境变量 BLEND_PIN_CPU=<n> 时，工作线程 i pin 到逻辑 CPU (n+i)。
+static bool pin_enabled() {
 #if SHIM_HAS_AFFINITY
+  static const bool on = [] {
+    const char* e = std::getenv("BLEND_PIN_CPU");
+    return e != nullptr && e[0] != '\0';
+  }();
+  return on;
+#else
+  return false;
+#endif
+}
+
+static int pin_base() {
+#if SHIM_HAS_AFFINITY
+  const char* e = std::getenv("BLEND_PIN_CPU");
+  return e ? std::atoi(e) : 0;
+#else
+  return 0;
+#endif
+}
+
+static void pin_to(int idx) {
+#if SHIM_HAS_AFFINITY
+  if (!pin_enabled()) return;
   cpu_set_t set;
   CPU_ZERO(&set);
-  CPU_SET(cpu, &set);
+  CPU_SET(pin_base() + idx, &set);
   pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
 #else
-  (void)cpu;
+  (void)idx;
 #endif
 }
 
