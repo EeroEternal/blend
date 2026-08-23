@@ -21,6 +21,7 @@ ft-engine = { workspace = true }
 ft-memory = { workspace = true }
 ft-loader = { workspace = true }
 ft-kernel = { workspace = true }
+ft-kernel-sys = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }

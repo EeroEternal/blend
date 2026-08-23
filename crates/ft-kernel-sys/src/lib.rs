@@ -80,6 +80,17 @@
             cols: c_int,
             stream: *mut std::ffi::c_void,
         ) -> c_int;
+        pub fn ft_gpu_rmsnorm(x: *mut f32, w: *const f32, n: c_int, eps: f32, stream: *mut std::ffi::c_void) -> c_int;
+        pub fn ft_gpu_rope(x: *mut f32, n_heads: c_int, dim: c_int, pos: c_int, theta: f32, stream: *mut std::ffi::c_void) -> c_int;
+        pub fn ft_gpu_gqa_decode(
+            q: *const f32, k: *const f32, v: *const f32, out: *mut f32,
+            heads: c_int, kv_heads: c_int, dim: c_int, seq: c_int, max_seq: c_int,
+            scale: f32, stream: *mut std::ffi::c_void,
+        ) -> c_int;
+        pub fn ft_gpu_copy_kv(
+            cache: *mut f32, src: *const f32, kv_heads: c_int, dim: c_int, pos: c_int, max_seq: c_int,
+            stream: *mut std::ffi::c_void,
+        ) -> c_int;
     }
 
     pub const cudaMemcpyHostToDevice: c_int = 1;

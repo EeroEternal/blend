@@ -224,6 +224,35 @@ mod gpu {
         if rc == 0 { Ok(()) } else { Err(FtError::Kernel("ft_gpu_zero".into())) }
     }
 
+    pub fn rmsnorm(x: &mut DevBuffer, w: &DevBuffer, n: usize, eps: f32, stream: &Stream) -> Result<()> {
+        let rc = unsafe { sys::ft_gpu_rmsnorm(x.as_mut_ptr() as *mut f32, w.as_ptr() as *const f32, n as i32, eps, stream.raw()) };
+        if rc == 0 { Ok(()) } else { Err(FtError::Kernel("rmsnorm".into())) }
+    }
+    pub fn rope(x: &mut DevBuffer, n_heads: usize, dim: usize, pos: usize, theta: f32, stream: &Stream) -> Result<()> {
+        let rc = unsafe { sys::ft_gpu_rope(x.as_mut_ptr() as *mut f32, n_heads as i32, dim as i32, pos as i32, theta, stream.raw()) };
+        if rc == 0 { Ok(()) } else { Err(FtError::Kernel("rope".into())) }
+    }
+    pub fn gqa_decode(
+        q: &DevBuffer, k: &DevBuffer, v: &DevBuffer, out: &mut DevBuffer,
+        heads: usize, kv_heads: usize, dim: usize, seq: usize, max_seq: usize, scale: f32, stream: &Stream,
+    ) -> Result<()> {
+        let rc = unsafe {
+            sys::ft_gpu_gqa_decode(
+                q.as_ptr() as *const f32, k.as_ptr() as *const f32, v.as_ptr() as *const f32,
+                out.as_mut_ptr() as *mut f32,
+                heads as i32, kv_heads as i32, dim as i32, seq as i32, max_seq as i32, scale, stream.raw(),
+            )
+        };
+        if rc == 0 { Ok(()) } else { Err(FtError::Kernel("gqa_decode".into())) }
+    }
+    pub fn copy_kv(cache: &mut DevBuffer, off_floats: usize, src: &DevBuffer, kv_heads: usize, dim: usize, pos: usize, max_seq: usize, stream: &Stream) -> Result<()> {
+        let rc = unsafe {
+            let p = (cache.as_mut_ptr() as *mut f32).add(off_floats);
+            sys::ft_gpu_copy_kv(p, src.as_ptr() as *const f32, kv_heads as i32, dim as i32, pos as i32, max_seq as i32, stream.raw())
+        };
+        if rc == 0 { Ok(()) } else { Err(FtError::Kernel("copy_kv".into())) }
+    }
+
     pub fn gemv_bf16(
         w: *const u16,
         x: &DevBuffer,
@@ -258,7 +287,7 @@ mod gpu {
 }
 
 #[cfg(feature = "cuda")]
-pub use gpu::{device_count, device_info, set_device, vector_add, expert_ffn, gemv_bf16, gpu_zero, DevBuffer, GpuSlotBank, PinnedBuf, Stream};
+pub use gpu::{device_count, device_info, set_device, vector_add, expert_ffn, gemv_bf16, gpu_zero, rmsnorm, rope, gqa_decode, copy_kv, DevBuffer, GpuSlotBank, PinnedBuf, Stream};
 
 /// CPU SIMD MoE 执行器（libftcpu.so 的 AVX512BF16 shim）。
 #[cfg(feature = "cpu-simd")]
