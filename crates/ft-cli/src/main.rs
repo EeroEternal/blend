@@ -11,6 +11,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// 加载全部层专家栈 decode（attention stub=残差）
+    MoeModel {
+        #[arg(long)]
+        model: String,
+        #[arg(long, default_value_t = 48)]
+        layers: usize,
+        #[arg(long, default_value_t = 4)]
+        steps: usize,
+    },
     /// 加载一整层 Qwen3-MoE（router + 全部专家），真实 top-k 前向
     MoeLayer {
         #[arg(long)]
@@ -150,6 +159,9 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
     match Cli::parse().cmd {
+        Cmd::MoeModel { model, layers, steps } => {
+            moe_model::run(&model, layers, steps)?;
+        }
         Cmd::MoeLayer { model, layer, tokens } => {
             moe_layer::run(&model, layer, tokens)?;
         }
@@ -214,6 +226,7 @@ mod gpu_smoke;
 mod hybrid_smoke;
 mod pcie_bench;
 mod moe_layer;
+mod moe_model;
 mod real_expert;
 mod mem_bench;
 mod moe_bench;
