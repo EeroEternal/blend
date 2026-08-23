@@ -11,10 +11,13 @@ use axum::{
     routing::{any, get},
     Json, Router,
 };
+use futures_core::Stream;
+use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
+use std::task::{Context, Poll};
 
 #[derive(Clone)]
 pub struct Gateway {
@@ -25,6 +28,8 @@ struct Inner {
     workers: Vec<String>,
     client: reqwest::Client,
     rr: AtomicUsize,
+    inflight: Vec<AtomicUsize>,
+    hits: Vec<AtomicUsize>,
 }
 
 impl Gateway {
@@ -42,8 +47,15 @@ impl Gateway {
             .pool_max_idle_per_host(64)
             .tcp_nodelay(true)
             .build()?;
+        let n = workers.len();
         Ok(Self {
-            inner: Arc::new(Inner { workers, client, rr: AtomicUsize::new(0) }),
+            inner: Arc::new(Inner {
+                workers,
+                client,
+                rr: AtomicUsize::new(0),
+                inflight: (0..n).map(|_| AtomicUsize::new(0)).collect(),
+                hits: (0..n).map(|_| AtomicUsize::new(0)).collect(),
+            }),
         })
     }
 
@@ -55,18 +67,15 @@ impl Gateway {
             .with_state(self)
     }
 
-    fn pick(&self, headers: &HeaderMap) -> &str {
-        // 会话粘滞：同一 x-blend-session / x-session-id 钉同一 worker
+    fn pick_idx(&self, headers: &HeaderMap) -> usize {
         if let Some(key) = headers
             .get("x-blend-session")
             .or_else(|| headers.get("x-session-id"))
             .and_then(|v| v.to_str().ok())
         {
-            let i = hash_str(key) % self.inner.workers.len();
-            return &self.inner.workers[i];
+            return hash_str(key) % self.inner.workers.len();
         }
-        let i = self.inner.rr.fetch_add(1, Ordering::Relaxed) % self.inner.workers.len();
-        &self.inner.workers[i]
+        self.inner.rr.fetch_add(1, Ordering::Relaxed) % self.inner.workers.len()
     }
 }
 
@@ -88,7 +97,20 @@ async fn healthz(State(gw): State<Gateway>) -> impl IntoResponse {
 }
 
 async fn workers(State(gw): State<Gateway>) -> impl IntoResponse {
-    Json(serde_json::json!({ "workers": gw.inner.workers }))
+    let list: Vec<_> = gw
+        .inner
+        .workers
+        .iter()
+        .enumerate()
+        .map(|(i, u)| {
+            serde_json::json!({
+                "url": u,
+                "inflight": gw.inner.inflight[i].load(Ordering::Relaxed),
+                "hits": gw.inner.hits[i].load(Ordering::Relaxed),
+            })
+        })
+        .collect();
+    Json(serde_json::json!({ "workers": list }))
 }
 
 async fn proxy(State(gw): State<Gateway>, req: Request) -> Response {
@@ -96,8 +118,12 @@ async fn proxy(State(gw): State<Gateway>, req: Request) -> Response {
     let headers = req.headers().clone();
     let uri = req.uri().clone();
     let path_q = path_and_query(&uri);
-    let worker = gw.pick(&headers).to_string();
+    let idx = gw.pick_idx(&headers);
+    let worker = gw.inner.workers[idx].clone();
+    gw.inner.inflight[idx].fetch_add(1, Ordering::Relaxed);
+    gw.inner.hits[idx].fetch_add(1, Ordering::Relaxed);
     let url = format!("{worker}{path_q}");
+    let _guard = InflightGuard { inner: gw.inner.clone(), idx };
 
     let body = match axum::body::to_bytes(req.into_body(), 16 * 1024 * 1024).await {
         Ok(b) => b,
@@ -137,7 +163,7 @@ async fn proxy(State(gw): State<Gateway>, req: Request) -> Response {
         }
         hs.insert("x-blend-worker", HeaderValue::from_str(&worker).unwrap_or_else(|_| HeaderValue::from_static("ok")));
     }
-    let stream = resp.bytes_stream();
+    let stream = GuardedStream { inner: resp.bytes_stream(), _guard: _guard };
     let body = Body::from_stream(stream);
     out.body(body).unwrap_or_else(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
@@ -146,6 +172,27 @@ async fn proxy(State(gw): State<Gateway>, req: Request) -> Response {
 
 fn path_and_query(uri: &Uri) -> String {
     uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_else(|| uri.path().to_string())
+}
+
+struct GuardedStream<S> {
+    inner: S,
+    _guard: InflightGuard,
+}
+impl<S: Stream + Unpin> Stream for GuardedStream<S> {
+    type Item = S::Item;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
+struct InflightGuard {
+    inner: Arc<Inner>,
+    idx: usize,
+}
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        self.inner.inflight[self.idx].fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 fn skip_hop(name: &str) -> bool {
