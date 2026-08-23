@@ -54,8 +54,10 @@ pub fn run(kernel: &str, tokens: usize, hidden: usize, inter: usize, experts: us
         _ => unreachable!(),
     }
 
+    // 按实际存储宽度计：naive=f32(4B), simd=bf16(2B)
+    let elem_bytes = if kernel == "simd" { 2.0 } else { 4.0 };
     let bytes_per_step =
-        (tokens * k) as f64 * ((2 * inter * hidden + hidden * inter) as f64) * 4.0;
+        (tokens * k) as f64 * ((2 * inter * hidden + hidden * inter) as f64) * elem_bytes;
     let t0 = std::time::Instant::now();
     for _ in 0..iters {
         match kernel {
