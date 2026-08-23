@@ -17,7 +17,17 @@ pub async fn run(
     );
     println!("{:>4}  {:>10}  {:>10}  {:>6}  {:>8}  worker", "turn", "ttft_ms", "total_ms", "tok", "sid");
 
-    let mut history = vec![json!({"role":"user","content":"Explain mixture-of-experts in one sentence, then wait."})];
+    // 垫一段长前缀，让 worker radix 有东西可命中（短 prompt 的 prefill 不是 1s TTFT 的主因）
+    let pad = std::env::var("BLEND_SESSION_PAD")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    let mut first = "Explain mixture-of-experts in one sentence, then wait.".to_string();
+    if pad > 0 {
+        first.push(' ');
+        first.push_str(&"MoE layer. ".repeat(pad / 10));
+    }
+    let mut history = vec![json!({"role":"user","content": first})];
     for t in 0..turns {
         let sid = if sticky {
             "agent-sess-v23".to_string()
