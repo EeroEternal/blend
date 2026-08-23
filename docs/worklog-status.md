@@ -146,6 +146,16 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑯ GPU 融合注意力尝试 ✅ 结论：短序列回退（2026-08-23）
+- [x] 实现 RMSNorm / RoPE / GQA decode / KV cache 的 CUDA 内核
+- [x] 真机对比（seq≈16）：
+  | | 8 层 | 48 层 |
+  |---|---|---|
+  | QKV 批处理 + CPU softmax | **88 / ~9 tok/s** | |
+  | 全 GPU fused attn | 62 / 5.6 tok/s | 更慢 |
+- 原因：每 head 一次 RMSNorm launch + softmax 单线程；短序列 kernel 启动 > 计算
+- 决策：decode 默认仍用 QKV+CPU softmax；内核留在 libftkernels 供长上下文
+
 ### ⑮ 同模型基线：FreeToken vs blend（Qwen3-30B-A3B）✅ 完成（2026-08-23）
 同卡 GPU4、同一份权重 `~/models/Qwen3-30B-A3B-Instruct`、都是 BF16：
 
