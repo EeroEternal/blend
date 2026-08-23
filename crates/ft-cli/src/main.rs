@@ -11,6 +11,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Hybrid 路径冒烟：LRU 缓存 + q* 拆分 + 真实 SIMD 内核
+    HybridSmoke {
+        #[arg(long, default_value_t = 8)]
+        steps: usize,
+        #[arg(long, default_value_t = 43)]
+        layers: usize,
+        /// GPU 专家缓存槽数（FreeToken DSV4 自动分配 5835）
+        #[arg(long, default_value_t = 5835)]
+        cache_slots: usize,
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
+    },
     /// 调度器 + SIMD MoE 端到端冒烟（走 admit/prefill/decode 循环）
     DecodeSmoke {
         /// decode 步数
@@ -101,6 +113,9 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
     match Cli::parse().cmd {
+        Cmd::HybridSmoke { steps, layers, cache_slots, threads } => {
+            hybrid_smoke::run(steps, layers, cache_slots, threads);
+        }
         Cmd::DecodeSmoke { steps, layers, full, threads } => {
             decode_smoke::run(steps, layers, full, threads);
         }
@@ -146,6 +161,7 @@ fn main() -> anyhow::Result<()> {
 
 mod decode_smoke;
 mod gpu_smoke;
+mod hybrid_smoke;
 mod mem_bench;
 mod moe_bench;
 mod parity;
