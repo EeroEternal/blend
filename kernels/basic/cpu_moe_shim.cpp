@@ -12,6 +12,12 @@
 #include <thread>
 #include <vector>
 
+#if defined(__linux__)
+#include <pthread.h>
+#include <sched.h>
+#define SHIM_HAS_AFFINITY 1
+#endif
+
 #if defined(__x86_64__)
 #include <immintrin.h>
 #endif
@@ -130,6 +136,20 @@ extern "C" {
 /// 返回检测到的 ISA 名。
 const char* ft_cpu_isa_name() { return isa_name_of(select_dot()); }
 
+// 工作线程亲和性：pin 到第 cpu 个逻辑 CPU。
+// 坑记录 docs/pitfall-smt-bandwidth.md：SMT 满载使带宽倒亏 ~27%；
+// Linux 默认枚举下前 N 个逻辑 CPU 通常即物理核，与 FreeToken 的做法一致。
+static void pin_to(int cpu) {
+#if SHIM_HAS_AFFINITY
+  cpu_set_t set;
+  CPU_ZERO(&set);
+  CPU_SET(cpu, &set);
+  pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+#else
+  (void)cpu;
+#endif
+}
+
 /// bf16 MoE 前向。返回 0 成功，非 0 参数错误。
 /// 布局：w13 [E,2I,H]、w2 [E,H,I]（行主）、ids [T,K]（负值跳过）、rw [T,K]、h [T,H] in/out。
 /// 两阶段行级并行：pass1 按 (t,j,row) 算 gate/up；激活融合；pass2 按 (t,o) 行算输出，
@@ -173,7 +193,8 @@ int ft_cpu_moe_bf16(float* h, const uint16_t* w13, const uint16_t* w2,
     };
     std::vector<std::thread> ths;
     ths.reserve(nth - 1);
-    for (int i = 1; i < nth; ++i) ths.emplace_back(body);
+    for (int i = 1; i < nth; ++i)
+      ths.emplace_back([&, i] { pin_to(i); body(); });
     body();
     for (auto& th : ths) th.join();
   };
@@ -216,7 +237,8 @@ int ft_cpu_moe_bf16(float* h, const uint16_t* w13, const uint16_t* w2,
     };
     std::vector<std::thread> ths;
     ths.reserve(nth - 1);
-    for (int i = 1; i < nth; ++i) ths.emplace_back(body);
+    for (int i = 1; i < nth; ++i)
+      ths.emplace_back([&, i] { pin_to(i); body(); });
     body();
     for (auto& th : ths) th.join();
   };

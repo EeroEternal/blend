@@ -1,6 +1,6 @@
 //! CPU MoE 吞吐基线。有效字节口径与 FreeToken benchbw 一致：
 //! 每 token 每 expert 读 w13(2*I*H) + w2(H*I) 的 fp32 字节。
-pub fn run(kernel: &str, tokens: usize, hidden: usize, inter: usize, experts: usize, k: usize, iters: usize) {
+pub fn run(kernel: &str, tokens: usize, hidden: usize, inter: usize, experts: usize, k: usize, iters: usize, threads_arg: usize) {
     use ft_moe::{CpuMoeExecutor, NaiveF32Executor};
     if kernel != "naive" && !cfg!(feature = "cpu-simd") {
         eprintln!("错误: kernel=simd 需要 --features cpu-simd 构建");
@@ -31,7 +31,7 @@ pub fn run(kernel: &str, tokens: usize, hidden: usize, inter: usize, experts: us
     let w2_bf16: Vec<u16> = w2.iter().map(|&v| f32_to_bf16(v)).collect();
     let topk_i32: Vec<i32> = topk.iter().map(|&v| v as i32).collect();
 
-    let threads = ft_moe::physical_cores();
+    let threads = if threads_arg == 0 { ft_moe::physical_cores() } else { threads_arg };
     if kernel == "simd" {
         #[cfg(feature = "cpu-simd")]
         println!("isa: {}", ft_kernel::cpu_isa_name());

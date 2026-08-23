@@ -73,6 +73,9 @@ enum Cmd {
         k: usize,
         #[arg(long, default_value_t = 5)]
         iters: usize,
+        /// 工作线程数（0=物理核数）
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
     },
 }
 
@@ -111,8 +114,8 @@ fn main() -> anyhow::Result<()> {
         Cmd::Parity { dir, tol, kernel } => {
             parity::run(std::path::Path::new(&dir), tol, &kernel)?;
         }
-        Cmd::MoeBench { kernel, tokens, hidden, inter, experts, k, iters } => {
-            moe_bench::run(&kernel, tokens, hidden, inter, experts, k, iters);
+        Cmd::MoeBench { kernel, tokens, hidden, inter, experts, k, iters, threads } => {
+            moe_bench::run(&kernel, tokens, hidden, inter, experts, k, iters, threads);
         }
         Cmd::MemBench { gib, iters, threads } => {
             mem_bench::run(gib, iters, threads);
