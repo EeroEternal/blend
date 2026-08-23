@@ -87,13 +87,26 @@ PYBIND11 部分(尾部)                                                      ←
 
 ## 四、下一步任务清单（按序执行）
 
-### ① AVX512BF16 内核吸收 + 对拍（当前任务）
-- [ ] 抽取计算函数段到 `kernels/basic/cpu_moe_shim.cpp`（记录来源 commit hash）
-- [ ] build.sh 增加 CPU 源编译（`-march=nocona -mavx512f -mavx512bf16 -mavx512vl`）
-- [ ] `ft-kernel-sys` 增加 `ft_cpu_moe_bf16` 声明
-- [ ] `blend parity --kernel avx512`：与 NaiveF32Executor/torch 三方对拍（tol 1e-2 相对，BF16 精度口径）
-- [ ] `blend moe-bench --kernel avx512`：验证吞吐从 8.7 → ~155 GB/s
-- 验收标准：DSV4 形状下 ≥100 GB/s，且三方 diff 在 BF16 容差内
+### ① AVX512BF16 内核吸收 + 对拍 ✅ 完成（2026-08-23）
+- [x] 抽取 dot 函数族到 `kernels/basic/cpu_moe_shim.cpp`（标注来源/Apache-2.0）
+- [x] build.sh 编出 `libftcpu.so`（g++ 纯 CPU，无 CUDA 依赖；ISA 运行时探测）
+- [x] `ft-kernel-sys` cpu-simd feature + `ft_cpu_moe_bf16`；`ft-kernel::moe_bf16` 安全封装
+- [x] 三方对拍全过：
+  - case1(小): simd rel=5.9e-3 ✅ / naive rel≈1e-6 ✅
+  - case2(H512/I256): simd rel=4.3e-3 ✅ / naive rel=7.4e-7 ✅
+- [x] DSV4 真实形状（8tok H4096 I2048 E256 k6，64 物理线程）：
+  - **naive f32: 555.7 ms/step = 8.7 GB/s**
+  - **simd avx512bf16: 21.2 ms/step = 113.7 GB/s（26×）**
+  - 达到 FreeToken 自带池（155.4 GB/s）的 73%
+- 过程中修复的 bug：
+  - 激活融合下标错误——gate 在块内 `[i]`、up 在 `[I+i]`，不是相邻配对（真机对拍抓出）
+  - shim 漏 `immintrin.h`
+  - moe-bench 带宽按实际权重宽度计（simd=BF16 2B）
+
+### ①' 剩余优化（113.7 → 155 GB/s 的差距来源）
+- [ ] 持久线程池替代每调用 spawn（当前两阶段各 spawn 63 线程 ≈ 数 ms 开销）
+- [ ] core pinning（任务②一并做）
+- [ ] bs>1 时专家去重（FreeToken 对同 token 批的重复专家只读一次）
 
 ### ② rayon 物理核 pinning 实装
 - [ ] `ft-cli`/engine 启动时按 `physical_cores()` 配置线程池
