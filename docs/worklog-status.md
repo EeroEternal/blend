@@ -146,6 +146,19 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑬ decode-qwen 接 hybrid MoE ✅ 完成（2026-08-23）
+- [x] 热专家上传并常驻 GpuSlotBank（384 槽）；miss 走 AVX512
+- [x] 真机 Qwen3-30B 48 层（prompt=8, gen=8）：
+
+  | 阶段 | tok/s |
+  |---|---|
+  | 全 CPU | 1.4 |
+  | + GPU QKV/O | 6.6 |
+  | **+ hybrid MoE** | **9.3** |
+  | 8 层 hybrid | **57.8** |
+
+- 整模已回到「专家-only CPU」的 9.3 tok/s，同时带上了真实注意力。
+
 ### ⑫ QKV/O 上 GPU ✅ 完成（2026-08-23）
 - [x] `ft_gpu_gemv_bf16` 通用接口；decode-qwen 注意力投影常驻 VRAM
 - [x] 真机对比（同一 Qwen3-30B，prompt=8, gen=4）：
