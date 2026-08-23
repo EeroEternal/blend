@@ -146,6 +146,15 @@ PYBIND11 部分(尾部)                                                      ←
 - [ ] `ft-engine` decode 步接入真实 MoE 执行路径（先 CPU 后 GPU）
 - [ ] FTW 格式加载器（memmap 直达最终布局）
 
+### ⑨ 整层真实 MoE ✅ 完成（2026-08-23）
+- [x] `blend moe-layer`：读 router + 128 专家（按分片批量 mmap），真实 top-8 softmax
+- [x] Qwen3-30B-A3B 层 0，4 token：
+  | | 延迟 | vs naive |
+  |---|---|---|
+  | naive f32 | 65.4 ms | — |
+  | **AVX512BF16** | **7.6 ms** | **rel=3.5e-4 PASS**（8.6×） |
+- 权重 1.2GB（w13 805 + w2 402）一次装入
+
 ### ⑧ 真实权重闭环 ✅ 完成（2026-08-23）
 - [x] `ft-loader::locate_tensor` 读 HF `model.safetensors.index.json`
 - [x] `blend real-expert --model Qwen3-30B-A3B --layer --expert`
