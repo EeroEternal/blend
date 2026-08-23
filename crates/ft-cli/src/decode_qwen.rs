@@ -9,7 +9,10 @@ use std::path::Path;
 struct GpuAttn {
     stream: ft_kernel::Stream,
     x: ft_kernel::DevBuffer,
-    y: ft_kernel::DevBuffer,
+    yq: ft_kernel::DevBuffer,
+    yk: ft_kernel::DevBuffer,
+    yv: ft_kernel::DevBuffer,
+    yo: ft_kernel::DevBuffer,
     /// 每层 4 块：q k v o
     w: Vec<ft_kernel::DevBuffer>,
 }
@@ -18,18 +21,40 @@ struct GpuAttn {
 impl GpuAttn {
     fn gemv(&mut self, layer: usize, which: usize, x: &[f32], rows: usize, cols: usize) -> anyhow::Result<Vec<f32>> {
         self.x.h2d(x)?;
+        let y = match which {
+            1 => &mut self.yk,
+            2 => &mut self.yv,
+            3 => &mut self.yo,
+            _ => &mut self.yq,
+        };
         ft_kernel::gemv_bf16(
             self.w[layer * 4 + which].as_ptr() as *const u16,
             &self.x,
-            &mut self.y,
+            y,
             rows,
             cols,
             &self.stream,
         )?;
         self.stream.sync()?;
         let mut out = vec![0f32; rows];
-        self.y.d2h(&mut out)?;
+        y.d2h(&mut out)?;
         Ok(out)
+    }
+
+    /// QKV 一次上传 x，三个 GEMV 后再 sync（少 2 次同步）。
+    fn qkv(&mut self, layer: usize, x: &[f32], hq: usize, hk: usize, cols: usize) -> anyhow::Result<(Vec<f32>, Vec<f32>, Vec<f32>)> {
+        self.x.h2d(x)?;
+        ft_kernel::gemv_bf16(self.w[layer * 4].as_ptr() as *const u16, &self.x, &mut self.yq, hq, cols, &self.stream)?;
+        ft_kernel::gemv_bf16(self.w[layer * 4 + 1].as_ptr() as *const u16, &self.x, &mut self.yk, hk, cols, &self.stream)?;
+        ft_kernel::gemv_bf16(self.w[layer * 4 + 2].as_ptr() as *const u16, &self.x, &mut self.yv, hk, cols, &self.stream)?;
+        self.stream.sync()?;
+        let mut q = vec![0f32; hq];
+        let mut k = vec![0f32; hk];
+        let mut v = vec![0f32; hk];
+        self.yq.d2h(&mut q)?;
+        self.yk.d2h(&mut k)?;
+        self.yv.d2h(&mut v)?;
+        Ok((q, k, v))
     }
 }
 
@@ -209,6 +234,22 @@ fn attention(
 ) -> Vec<f32> {
     let hq = HEADS * HEAD_DIM;
     let hk = KV_HEADS * HEAD_DIM;
+    let (q, k, v) = {
+        #[cfg(feature = "cuda")]
+        {
+            if let Some(g) = gpu.as_mut() {
+                g.qkv(layer_id, x, hq, hk, x.len()).unwrap_or_else(|_| {
+                    (gemv(&a.q, x, hq, x.len()), gemv(&a.k, x, hk, x.len()), gemv(&a.v, x, hk, x.len()))
+                })
+            } else {
+                (gemv(&a.q, x, hq, x.len()), gemv(&a.k, x, hk, x.len()), gemv(&a.v, x, hk, x.len()))
+            }
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            (gemv(&a.q, x, hq, x.len()), gemv(&a.k, x, hk, x.len()), gemv(&a.v, x, hk, x.len()))
+        }
+    };
     let mut gemv_w = |w: &[u16], x: &[f32], rows: usize, cols: usize, which: usize| -> Vec<f32> {
         #[cfg(feature = "cuda")]
         if let Some(g) = gpu.as_mut() {
@@ -218,9 +259,6 @@ fn attention(
         }
         gemv(w, x, rows, cols)
     };
-    let q = gemv_w(&a.q, x, hq, x.len(), 0);
-    let k = gemv_w(&a.k, x, hk, x.len(), 1);
-    let v = gemv_w(&a.v, x, hk, x.len(), 2);
     let mut qh = vec![[0f32; HEAD_DIM]; HEADS];
     let mut kh = vec![[0f32; HEAD_DIM]; KV_HEADS];
     let mut vh = vec![[0f32; HEAD_DIM]; KV_HEADS];
@@ -284,7 +322,10 @@ fn init_gpu_attn(layers: &[Layer], hidden: usize) -> anyhow::Result<GpuAttn> {
     let stream = Stream::new()?;
     let max_out = HEADS * HEAD_DIM; // 4096
     let x = DevBuffer::alloc(hidden.max(max_out) * 4)?;
-    let y = DevBuffer::alloc(max_out.max(hidden) * 4)?;
+    let yq = DevBuffer::alloc(max_out * 4)?;
+    let yk = DevBuffer::alloc(KV_HEADS * HEAD_DIM * 4)?;
+    let yv = DevBuffer::alloc(KV_HEADS * HEAD_DIM * 4)?;
+    let yo = DevBuffer::alloc(hidden * 4)?;
     let mut w = Vec::new();
     for L in layers {
         for src in [&L.attn.q, &L.attn.k, &L.attn.v, &L.attn.o] {
@@ -293,7 +334,7 @@ fn init_gpu_attn(layers: &[Layer], hidden: usize) -> anyhow::Result<GpuAttn> {
             w.push(b);
         }
     }
-    Ok(GpuAttn { stream, x, y, w })
+    Ok(GpuAttn { stream, x, yq, yk, yv, yo, w })
 }
 
 fn moe_residual(
@@ -353,9 +394,7 @@ fn moe_residual(
                 hidden, inter, wgt, &g.stream,
             )?;
         }
-        g.stream.sync()?;
-        g.y.d2h(&mut y)?;
-        // ids 与 rw 对齐：GPU 专家置 -1，保留原槽位的路由权重
+        // q* 重叠：先发射 GPU，同时 CPU 算 miss，最后再 sync
         let cpu_ids: Vec<i32> = ids
             .iter()
             .map(|&eid| {
@@ -363,15 +402,18 @@ fn moe_residual(
                 if cpu { eid as i32 } else { -1 }
             })
             .collect();
+        let mut yc = vec![0f32; hidden];
         if cpu_ids.iter().any(|&id| id >= 0) {
             #[cfg(feature = "cpu-simd")]
             {
-                let mut yc = n.to_vec();
+                yc.copy_from_slice(n);
                 ft_kernel::moe_bf16(&mut yc, &layer.w13, &layer.w2, &cpu_ids, &rw, 1, hidden, inter, e, k_moe, th)?;
-                for (a, b) in y.iter_mut().zip(yc.iter()) {
-                    *a += *b;
-                }
             }
+        }
+        g.stream.sync()?;
+        g.y.d2h(&mut y)?;
+        for (a, b) in y.iter_mut().zip(yc.iter()) {
+            *a += *b;
         }
         for (a, b) in h.iter_mut().zip(y.iter()) {
             *a += *b;
